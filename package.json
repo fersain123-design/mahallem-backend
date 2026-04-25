@@ -16,7 +16,7 @@
     "prebuild": "npm run prisma:generate",
     "build": "node ./node_modules/typescript/bin/tsc",
     "postbuild": "node scripts/copy_geojson_to_dist.js",
-    "prestart": "npm run build",
+    "prestart": "node -e \"console.log('Using committed dist build output')\"",
     "start": "node dist/server.js",
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "node scripts/prisma_generate_safe.js",

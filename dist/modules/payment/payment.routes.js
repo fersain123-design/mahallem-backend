@@ -1,0 +1,16 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const authMiddleware_1 = require("../../middleware/authMiddleware");
+const requireRole_1 = require("../../middleware/requireRole");
+const payment_controller_1 = require("./payment.controller");
+const payment_webhook_controller_1 = require("./payment.webhook.controller");
+const router = (0, express_1.Router)();
+router.post('/payments/initialize', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['CUSTOMER']), payment_controller_1.initializePayment);
+router.post('/payments/callback', payment_webhook_controller_1.paymentCallback);
+router.post('/payments/webhook', payment_webhook_controller_1.paymentWebhook);
+router.get('/payments/:id', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['CUSTOMER', 'VENDOR', 'ADMIN']), payment_controller_1.getPaymentById);
+router.post('/payments/:id/refund', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR', 'ADMIN']), payment_controller_1.refundPayment);
+router.post('/vendors/:vendorId/submerchant/register', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR', 'ADMIN']), payment_controller_1.registerSubmerchant);
+router.put('/vendors/:vendorId/submerchant/update', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR', 'ADMIN']), payment_controller_1.updateSubmerchant);
+exports.default = router;

@@ -1,5 +1,4 @@
 node_modules/
-dist/
 .env
 .env.local
 .env.*.local
@@ -17,6 +16,5 @@ yarn-error.log*
 .prettier-ignore
 node_modules
 .env.production
-dist
 build
 .logs

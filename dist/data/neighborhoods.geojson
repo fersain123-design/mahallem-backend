@@ -1,0 +1,258 @@
+{
+  "type": "FeatureCollection",
+  "description": "Türkiye mahalle sınır polygonları – örnek veri. Gerçek veri için OpenStreetMap / Overpass API'den export yapılabilir.",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Caferağa Mahallesi",
+        "district": "Kadıköy",
+        "city": "İstanbul",
+        "postalCode": "34710"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [29.0205, 40.9880],
+            [29.0285, 40.9880],
+            [29.0285, 40.9925],
+            [29.0205, 40.9925],
+            [29.0205, 40.9880]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Osmanağa Mahallesi",
+        "district": "Kadıköy",
+        "city": "İstanbul",
+        "postalCode": "34714"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [29.0230, 40.9830],
+            [29.0310, 40.9830],
+            [29.0310, 40.9880],
+            [29.0230, 40.9880],
+            [29.0230, 40.9830]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Fenerbahçe Mahallesi",
+        "district": "Kadıköy",
+        "city": "İstanbul",
+        "postalCode": "34726"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [29.0320, 40.9660],
+            [29.0520, 40.9660],
+            [29.0520, 40.9770],
+            [29.0320, 40.9770],
+            [29.0320, 40.9660]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Acıbadem Mahallesi",
+        "district": "Kadıköy",
+        "city": "İstanbul",
+        "postalCode": "34718"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [29.0490, 40.9870],
+            [29.0640, 40.9870],
+            [29.0640, 40.9970],
+            [29.0490, 40.9970],
+            [29.0490, 40.9870]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Moda Mahallesi",
+        "district": "Kadıköy",
+        "city": "İstanbul",
+        "postalCode": "34710"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [29.0220, 40.9780],
+            [29.0330, 40.9780],
+            [29.0330, 40.9840],
+            [29.0220, 40.9840],
+            [29.0220, 40.9780]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Erenköy Mahallesi",
+        "district": "Kadıköy",
+        "city": "İstanbul",
+        "postalCode": "34738"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [29.0650, 40.9680],
+            [29.0850, 40.9680],
+            [29.0850, 40.9810],
+            [29.0650, 40.9810],
+            [29.0650, 40.9680]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Kızıltoprak Mahallesi",
+        "district": "Kadıköy",
+        "city": "İstanbul",
+        "postalCode": "34724"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [29.0270, 40.9920],
+            [29.0400, 40.9920],
+            [29.0400, 40.9990],
+            [29.0270, 40.9990],
+            [29.0270, 40.9920]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Cihangir Mahallesi",
+        "district": "Beyoğlu",
+        "city": "İstanbul",
+        "postalCode": "34433"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [28.9790, 41.0290],
+            [28.9870, 41.0290],
+            [28.9870, 41.0350],
+            [28.9790, 41.0350],
+            [28.9790, 41.0290]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Beşiktaş Mahallesi",
+        "district": "Beşiktaş",
+        "city": "İstanbul",
+        "postalCode": "34353"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [29.0000, 41.0380],
+            [29.0120, 41.0380],
+            [29.0120, 41.0480],
+            [29.0000, 41.0480],
+            [29.0000, 41.0380]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Bahçelievler Mahallesi",
+        "district": "Çankaya",
+        "city": "Ankara",
+        "postalCode": "06500"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [32.8300, 39.9100],
+            [32.8500, 39.9100],
+            [32.8500, 39.9250],
+            [32.8300, 39.9250],
+            [32.8300, 39.9100]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Kızılay Mahallesi",
+        "district": "Çankaya",
+        "city": "Ankara",
+        "postalCode": "06420"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [32.8450, 39.9100],
+            [32.8700, 39.9100],
+            [32.8700, 39.9250],
+            [32.8450, 39.9250],
+            [32.8450, 39.9100]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Alsancak Mahallesi",
+        "district": "Konak",
+        "city": "İzmir",
+        "postalCode": "35220"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [27.1300, 38.4350],
+            [27.1500, 38.4350],
+            [27.1500, 38.4500],
+            [27.1300, 38.4500],
+            [27.1300, 38.4350]
+          ]
+        ]
+      }
+    }
+  ]
+}
