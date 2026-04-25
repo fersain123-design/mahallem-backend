@@ -18,6 +18,8 @@ import { resolveLocation, getLocationStats } from './controllers/locationControl
 import { authMiddleware } from './middleware/authMiddleware';
 import { requireRole } from './middleware/requireRole';
 
+type CorsOriginCallback = (error: Error | null, allow?: boolean) => void;
+
 const app: Application = express();
 const isProduction = process.env.NODE_ENV === 'production';
 const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '');
@@ -46,7 +48,7 @@ const authRateLimit = rateLimit({
 app.use(
   cors({
     credentials: true,
-    origin: (origin, callback) => {
+    origin: (origin: string | undefined, callback: CorsOriginCallback) => {
       if (!origin) {
         callback(null, true);
         return;

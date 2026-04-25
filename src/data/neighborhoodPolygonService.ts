@@ -157,7 +157,7 @@ function normalizeMultiPolygonCoordinates(coords: number[][][][]): number[][][][
   const out: number[][][][] = [];
 
   for (const poly of coords) {
-    const normalized = normalizePolygonCoordinates(poly as any);
+    const normalized = normalizePolygonCoordinates(poly);
     if (normalized) out.push(normalized);
   }
 
@@ -512,7 +512,7 @@ export function getNearbyNeighborhoodPolygons(
 
   return {
     type: 'FeatureCollection',
-    features: candidates.map((item) => features[item.idx]).filter(Boolean),
+    features: candidates.map((item: RTreeItem) => features[item.idx]).filter(Boolean),
   };
 }
 
