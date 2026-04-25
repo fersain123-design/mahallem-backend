@@ -1,0 +1,19 @@
+﻿
+> mahallem-backend@1.0.0 predev
+> node scripts/prisma_generate_if_missing.js
+
+[predev] Prisma engine already present; skipping prisma generate.
+
+> mahallem-backend@1.0.0 dev
+> ts-node-dev --respawn --files src/server.ts
+
+[INFO] 15:25:33 ts-node-dev ver. 2.0.0 (using ts-node ver. 10.9.2, typescript ver. 5.9.3)
+prisma:info Starting a sqlite pool with 5 connections.
+✓ Database connected successfully
+
+╔════════════════════════════════════════════╗
+║      Mahallem Backend Server Started        ║
+║         http://localhost:4000              ║
+╚════════════════════════════════════════════╝
+      
+

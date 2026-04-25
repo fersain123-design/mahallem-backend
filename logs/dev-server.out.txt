@@ -1,0 +1,11 @@
+﻿
+> mahallem-backend@1.0.0 predev
+> npm run prisma:generate
+
+
+> mahallem-backend@1.0.0 prisma:generate
+> prisma generate
+
+Environment variables loaded from .env
+Prisma schema loaded from prisma\schema.prisma
+

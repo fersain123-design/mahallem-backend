@@ -1,0 +1,28 @@
+﻿
+> mahallem-backend@1.0.0 predev
+> node scripts/prisma_generate_if_missing.js
+
+[predev] Prisma engine already present; skipping prisma generate.
+
+> mahallem-backend@1.0.0 dev
+> ts-node-dev --respawn --files src/server.ts
+
+[INFO] 15:04:10 ts-node-dev ver. 2.0.0 (using ts-node ver. 10.9.2, typescript ver. 5.9.3)
+prisma:info Starting a sqlite pool with 5 connections.
+✓ Database connected successfully
+
+╔════════════════════════════════════════════╗
+║      Mahallem Backend Server Started        ║
+║         http://localhost:4000              ║
+╚════════════════════════════════════════════╝
+      
+prisma:query SELECT 1
+prisma:query SELECT `main`.`VendorProfile`.`id`, `main`.`VendorProfile`.`userId`, `main`.`VendorProfile`.`shopName`, `main`.`VendorProfile`.`address`, `main`.`VendorProfile`.`status`, `main`.`VendorProfile`.`businessType` FROM `main`.`VendorProfile` WHERE `main`.`VendorProfile`.`status` = ? LIMIT ? OFFSET ?
+prisma:query SELECT 1
+prisma:query SELECT `main`.`Category`.`id`, `main`.`Category`.`name`, `main`.`Category`.`slug`, `main`.`Category`.`description`, `main`.`Category`.`isActive` FROM `main`.`Category` WHERE `main`.`Category`.`isActive` = ? ORDER BY `main`.`Category`.`name` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Product`.`id`, `main`.`Product`.`vendorId`, `main`.`Product`.`categoryId`, `main`.`Product`.`name`, `main`.`Product`.`slug`, `main`.`Product`.`description`, `main`.`Product`.`price`, `main`.`Product`.`stock`, `main`.`Product`.`unit`, `main`.`Product`.`imageUrl`, `main`.`Product`.`isActive`, `main`.`Product`.`createdAt`, `main`.`Product`.`updatedAt` FROM `main`.`Product` LEFT JOIN `main`.`VendorProfile` AS `j0` ON (`j0`.`id`) = (`main`.`Product`.`vendorId`) WHERE (`main`.`Product`.`isActive` = ? AND (`j0`.`status` = ? AND (`j0`.`id` IS NOT NULL))) ORDER BY `main`.`Product`.`createdAt` DESC LIMIT ? OFFSET ?
+prisma:query SELECT COUNT(*) AS `_count._all` FROM (SELECT `main`.`Product`.`id` FROM `main`.`Product` LEFT JOIN `main`.`VendorProfile` AS `j0` ON (`j0`.`id`) = (`main`.`Product`.`vendorId`) WHERE (`main`.`Product`.`isActive` = ? AND (`j0`.`status` = ? AND (`j0`.`id` IS NOT NULL))) LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT `main`.`VendorProfile`.`id`, `main`.`VendorProfile`.`shopName`, `main`.`VendorProfile`.`status` FROM `main`.`VendorProfile` WHERE `main`.`VendorProfile`.`id` IN (?) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Category`.`id`, `main`.`Category`.`name` FROM `main`.`Category` WHERE `main`.`Category`.`id` IN (?) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`ProductImage`.`id`, `main`.`ProductImage`.`productId`, `main`.`ProductImage`.`imageUrl`, `main`.`ProductImage`.`sortOrder` FROM `main`.`ProductImage` WHERE `main`.`ProductImage`.`productId` IN (?) ORDER BY `main`.`ProductImage`.`sortOrder` ASC LIMIT ? OFFSET ?
+

@@ -1,0 +1,1 @@
+ALTER TABLE "SellerCampaign" ADD COLUMN "customerNotifiedAt" DATETIME;

@@ -1,0 +1,5 @@
+﻿Error: 
+EPERM: operation not permitted, rename 'C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\node_modules\.prisma\client\query_engine-windows.dll.node.tmp11100' -> 'C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\node_modules\.prisma\client\query_engine-windows.dll.node'
+
+
+

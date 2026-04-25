@@ -1,0 +1,13 @@
+﻿Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1817:16)
+    at listenInCluster (node:net:1865:12)
+    at Server.listen (node:net:1953:7)
+    at Function.listen (C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\node_modules\express\lib\application.js:635:24)
+    at startServer (C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\src\server.ts:26:9)
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1817:16)
+    at listenInCluster (node:net:1865:12)
+    at Server.listen (node:net:1953:7)
+    at Function.listen (C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\node_modules\express\lib\application.js:635:24)
+    at startServer (C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\src\server.ts:26:9)
+

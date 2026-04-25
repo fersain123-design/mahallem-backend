@@ -1,0 +1,9 @@
+﻿✗ Failed to start server: PrismaClientInitializationError: Error querying the database: Error code 14: Unable to open the database file
+    at r (C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\node_modules\@prisma\client\runtime\library.js:112:2565)
+    at withTimeout (C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\src\server.ts:14:13)
+    at startServer (C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\src\server.ts:23:5) {
+  clientVersion: '6.9.0',
+  errorCode: undefined,
+  retryable: undefined
+}
+

@@ -1,0 +1,18 @@
+﻿
+> mahallem-backend@1.0.0 predev
+> node scripts/prisma_generate_if_missing.js
+
+[predev] Prisma engine already present; skipping prisma generate.
+
+> mahallem-backend@1.0.0 dev
+> ts-node-dev --respawn --files src/server.ts
+
+[INFO] 16:49:55 ts-node-dev ver. 2.0.0 (using ts-node ver. 10.9.2, typescript ver. 5.9.3)
+prisma:info Starting a sqlite pool with 5 connections.
+✓ Database connected successfully
+[ERROR] 16:51:02 Error: listen EADDRINUSE: address already in use :::4000
+[INFO] 17:48:07 Restarting: C:\Users\CASPER\OneDrive\Masaüstü\mahallem-seri-main\mahallem zirve\src\services\orderService.ts has been modified
+prisma:info Starting a sqlite pool with 5 connections.
+✓ Database connected successfully
+[ERROR] 17:53:55 Error: listen EADDRINUSE: address already in use :::4000
+

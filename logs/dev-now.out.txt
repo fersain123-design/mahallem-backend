@@ -1,0 +1,31 @@
+﻿
+> mahallem-backend@1.0.0 predev
+> node scripts/prisma_generate_if_missing.js
+
+[predev] Prisma engine already present; skipping prisma generate.
+
+> mahallem-backend@1.0.0 dev
+> ts-node-dev --respawn --files src/server.ts
+
+[INFO] 22:24:48 ts-node-dev ver. 2.0.0 (using ts-node ver. 10.9.2, typescript ver. 5.9.3)
+[ERROR] 22:27:53 ⨯ Unable to compile TypeScript:
+src/controllers/customerController.ts(456,24): error TS2304: Cannot find name 'normalizeBusinessType'.
+
+[INFO] 22:30:08 Restarting: c:\Users\CASPER\OneDrive\Masaüstü\mahallem3333\mahallem-backend\src\controllers\customerController.ts has been modified
+[INFO] 22:37:52 Restarting: c:\Users\CASPER\OneDrive\Masaüstü\mahallem3333\mahallem-backend\src\controllers\customerController.ts has been modified
+prisma:info Starting a sqlite pool with 5 connections.
+✓ Database connected successfully
+[ERROR] 22:38:56 Error: listen EADDRINUSE: address already in use 0.0.0.0:4000
+[INFO] 22:52:22 Restarting: c:\Users\CASPER\OneDrive\Masaüstü\mahallem3333\mahallem-backend\src\controllers\chatController.ts has been modified
+prisma:info Starting a sqlite pool with 5 connections.
+✓ Database connected successfully
+[ERROR] 22:52:52 Error: listen EADDRINUSE: address already in use 0.0.0.0:4000
+[INFO] 22:53:22 Restarting: c:\Users\CASPER\OneDrive\Masaüstü\mahallem3333\mahallem-backend\src\controllers\chatController.ts has been modified
+prisma:info Starting a sqlite pool with 5 connections.
+✓ Database connected successfully
+[ERROR] 22:53:36 Error: listen EADDRINUSE: address already in use 0.0.0.0:4000
+[INFO] 23:25:43 Restarting: c:\Users\CASPER\OneDrive\Masaüstü\mahallem3333\mahallem-backend\src\services\authService.ts has been modified
+prisma:info Starting a sqlite pool with 5 connections.
+✓ Database connected successfully
+[ERROR] 23:26:39 Error: listen EADDRINUSE: address already in use 0.0.0.0:4000
+
