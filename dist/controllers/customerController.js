@@ -126,6 +126,25 @@ const formatDeliveryRangeText = (minMinutes, maxMinutes) => {
 const resolveProductDisplayCategory = (product) => {
     return String(product?.subCategory?.name || product?.subCategoryName || product?.category?.name || '').trim();
 };
+const getErrorMessage = (error) => {
+    if (!error)
+        return '';
+    const asAny = error;
+    return String(asAny?.message || error || '');
+};
+const isDatabaseRuntimeError = (error) => {
+    const message = getErrorMessage(error).toLowerCase();
+    const code = String(error?.code || '').toUpperCase();
+    return (code.startsWith('P') ||
+        message.includes('prisma') ||
+        message.includes('database') ||
+        message.includes('relation') ||
+        message.includes('table') ||
+        message.includes('does not exist') ||
+        message.includes('no such table') ||
+        message.includes("can't reach database server") ||
+        message.includes('connection'));
+};
 // Profile endpoints
 const getProfile = async (req, res, next) => {
     try {
@@ -523,7 +542,8 @@ const getProducts = async (req, res, next) => {
         const productIds = rawProducts.map((p) => String(p?.id || '')).filter(Boolean);
         const [salesAgg, reviewsAgg] = await Promise.all([
             productIds.length > 0
-                ? db_1.default.orderItem.groupBy({
+                ? db_1.default
+                    .orderItem.groupBy({
                     by: ['productId'],
                     where: {
                         productId: { in: productIds },
@@ -531,14 +551,17 @@ const getProducts = async (req, res, next) => {
                     },
                     _sum: { quantity: true },
                 })
+                    .catch(() => [])
                 : Promise.resolve([]),
             productIds.length > 0
-                ? db_1.default.productReview.groupBy({
+                ? db_1.default
+                    .productReview.groupBy({
                     by: ['productId'],
                     where: { productId: { in: productIds } },
                     _count: { _all: true },
                     _avg: { rating: true },
                 })
+                    .catch(() => [])
                 : Promise.resolve([]),
         ]);
         const soldMap = new Map();
@@ -604,6 +627,24 @@ const getProducts = async (req, res, next) => {
         });
     }
     catch (error) {
+        if (isDatabaseRuntimeError(error)) {
+            res.status(200).json({
+                success: false,
+                message: 'Catalog database is temporarily unavailable',
+                reason: getErrorMessage(error),
+                data: {
+                    products: [],
+                    pagination: {
+                        total: 0,
+                        page: 1,
+                        limit: 20,
+                        pages: 0,
+                    },
+                    neighborhoodStats: null,
+                },
+            });
+            return;
+        }
         next(error);
     }
 };
@@ -897,16 +938,23 @@ const computeVendorRatingsFromProductReviews = async (vendorIds) => {
     const ids = Array.from(new Set((vendorIds || []).map((x) => String(x || '').trim()).filter(Boolean)));
     if (ids.length === 0)
         return new Map();
-    const rows = await db_1.default.productReview.findMany({
-        where: {
-            rating: { not: null },
-            product: { vendorId: { in: ids } },
-        },
-        select: {
-            rating: true,
-            product: { select: { vendorId: true } },
-        },
-    });
+    let rows = [];
+    try {
+        rows = await db_1.default.productReview.findMany({
+            where: {
+                rating: { not: null },
+                product: { vendorId: { in: ids } },
+            },
+            select: {
+                rating: true,
+                product: { select: { vendorId: true } },
+            },
+        });
+    }
+    catch {
+        // Rating enrichment is optional; return zeroed stats when reviews table is unavailable.
+        rows = [];
+    }
     const sums = new Map();
     for (const r of rows) {
         const vendorId = String(r?.product?.vendorId || '').trim();
@@ -987,8 +1035,8 @@ const getVendors = async (req, res, next) => {
             return true;
         });
         const ratingMap = await computeVendorRatingsFromProductReviews(filteredVendors.map((v) => v.id));
-        const campaignMap = await (0, sellerCampaignService_1.getActiveSellerCampaignMapForSellers)(filteredVendors.map((v) => String(v.id)));
-        const deliverySettingsMap = await (0, platformNeighborhoodDeliveryService_1.getPlatformNeighborhoodSettingsMap)(filteredVendors.map((v) => v.neighborhood));
+        const campaignMap = await (0, sellerCampaignService_1.getActiveSellerCampaignMapForSellers)(filteredVendors.map((v) => String(v.id))).catch(() => new Map());
+        const deliverySettingsMap = await (0, platformNeighborhoodDeliveryService_1.getPlatformNeighborhoodSettingsMap)(filteredVendors.map((v) => v.neighborhood)).catch(() => new Map());
         const campaignOnly = String(req.query?.campaignOnly || '').trim().toLowerCase() === 'true';
         const vendorCards = await Promise.all(filteredVendors
             .filter((v) => {
@@ -1057,6 +1105,15 @@ const getVendors = async (req, res, next) => {
         });
     }
     catch (error) {
+        if (isDatabaseRuntimeError(error)) {
+            res.status(200).json({
+                success: false,
+                message: 'Vendor catalog database is temporarily unavailable',
+                reason: getErrorMessage(error),
+                data: [],
+            });
+            return;
+        }
         next(error);
     }
 };

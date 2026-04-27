@@ -122,6 +122,29 @@ const resolveProductDisplayCategory = (product: any) => {
   return String(product?.subCategory?.name || product?.subCategoryName || product?.category?.name || '').trim();
 };
 
+const getErrorMessage = (error: unknown): string => {
+  if (!error) return '';
+  const asAny = error as any;
+  return String(asAny?.message || error || '');
+};
+
+const isDatabaseRuntimeError = (error: unknown): boolean => {
+  const message = getErrorMessage(error).toLowerCase();
+  const code = String((error as any)?.code || '').toUpperCase();
+
+  return (
+    code.startsWith('P') ||
+    message.includes('prisma') ||
+    message.includes('database') ||
+    message.includes('relation') ||
+    message.includes('table') ||
+    message.includes('does not exist') ||
+    message.includes('no such table') ||
+    message.includes("can't reach database server") ||
+    message.includes('connection')
+  );
+};
+
 // Profile endpoints
 export const getProfile = async (
   req: Request,
@@ -644,22 +667,26 @@ export const getProducts = async (
 
     const [salesAgg, reviewsAgg] = await Promise.all([
       productIds.length > 0
-        ? (prisma as any).orderItem.groupBy({
-            by: ['productId'],
-            where: {
-              productId: { in: productIds },
-              order: { status: 'DELIVERED' },
-            },
-            _sum: { quantity: true },
-          })
+        ? (prisma as any)
+            .orderItem.groupBy({
+              by: ['productId'],
+              where: {
+                productId: { in: productIds },
+                order: { status: 'DELIVERED' },
+              },
+              _sum: { quantity: true },
+            })
+            .catch(() => [])
         : Promise.resolve([]),
       productIds.length > 0
-        ? (prisma as any).productReview.groupBy({
-            by: ['productId'],
-            where: { productId: { in: productIds } },
-            _count: { _all: true },
-            _avg: { rating: true },
-          })
+        ? (prisma as any)
+            .productReview.groupBy({
+              by: ['productId'],
+              where: { productId: { in: productIds } },
+              _count: { _all: true },
+              _avg: { rating: true },
+            })
+            .catch(() => [])
         : Promise.resolve([]),
     ]);
 
@@ -729,6 +756,24 @@ export const getProducts = async (
       },
     });
   } catch (error) {
+    if (isDatabaseRuntimeError(error)) {
+      res.status(200).json({
+        success: false,
+        message: 'Catalog database is temporarily unavailable',
+        reason: getErrorMessage(error),
+        data: {
+          products: [],
+          pagination: {
+            total: 0,
+            page: 1,
+            limit: 20,
+            pages: 0,
+          },
+          neighborhoodStats: null,
+        },
+      });
+      return;
+    }
     next(error);
   }
 };
@@ -1070,16 +1115,22 @@ const computeVendorRatingsFromProductReviews = async (vendorIds: string[]) => {
   const ids = Array.from(new Set((vendorIds || []).map((x) => String(x || '').trim()).filter(Boolean)));
   if (ids.length === 0) return new Map<string, { rating: number | null; rating_count: number }>();
 
-  const rows = await prisma.productReview.findMany({
-    where: {
-      rating: { not: null },
-      product: { vendorId: { in: ids } },
-    },
-    select: {
-      rating: true,
-      product: { select: { vendorId: true } },
-    },
-  });
+  let rows: any[] = [];
+  try {
+    rows = await prisma.productReview.findMany({
+      where: {
+        rating: { not: null },
+        product: { vendorId: { in: ids } },
+      },
+      select: {
+        rating: true,
+        product: { select: { vendorId: true } },
+      },
+    });
+  } catch {
+    // Rating enrichment is optional; return zeroed stats when reviews table is unavailable.
+    rows = [];
+  }
 
   const sums = new Map<string, { sum: number; count: number }>();
   for (const r of rows as any[]) {
@@ -1167,10 +1218,12 @@ export const getVendors = async (
     });
 
     const ratingMap = await computeVendorRatingsFromProductReviews(filteredVendors.map((v) => v.id));
-    const campaignMap = await getActiveSellerCampaignMapForSellers(filteredVendors.map((v) => String(v.id)));
+    const campaignMap = await getActiveSellerCampaignMapForSellers(filteredVendors.map((v) => String(v.id))).catch(
+      () => new Map<string, any>()
+    );
     const deliverySettingsMap = await getPlatformNeighborhoodSettingsMap(
       filteredVendors.map((v) => (v as any).neighborhood)
-    );
+    ).catch(() => new Map<string, any>());
     const campaignOnly = String(req.query?.campaignOnly || '').trim().toLowerCase() === 'true';
 
     const vendorCards = await Promise.all(
@@ -1247,6 +1300,15 @@ export const getVendors = async (
       data: vendorCards,
     });
   } catch (error) {
+    if (isDatabaseRuntimeError(error)) {
+      res.status(200).json({
+        success: false,
+        message: 'Vendor catalog database is temporarily unavailable',
+        reason: getErrorMessage(error),
+        data: [],
+      });
+      return;
+    }
     next(error);
   }
 };

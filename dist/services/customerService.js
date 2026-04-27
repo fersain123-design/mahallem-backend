@@ -252,22 +252,30 @@ const attachActiveCampaignDiscounts = async (products) => {
     if (vendorIds.length === 0)
         return products;
     const now = new Date();
-    const campaigns = await db_1.default.campaign.findMany({
-        where: {
-            vendorProfileId: { in: vendorIds },
-            startDate: { lte: now },
-            endDate: { gte: now },
-            status: { in: ['active', 'pending'] },
-        },
-        select: {
-            vendorProfileId: true,
-            scope: true,
-            discountType: true,
-            discountAmount: true,
-            selectedProducts: true,
-        },
-        orderBy: { discountAmount: 'desc' },
-    });
+    let campaigns = [];
+    try {
+        campaigns = await db_1.default.campaign.findMany({
+            where: {
+                vendorProfileId: { in: vendorIds },
+                startDate: { lte: now },
+                endDate: { gte: now },
+                status: { in: ['active', 'pending'] },
+            },
+            select: {
+                vendorProfileId: true,
+                scope: true,
+                discountType: true,
+                discountAmount: true,
+                selectedProducts: true,
+            },
+            orderBy: { discountAmount: 'desc' },
+        });
+    }
+    catch (error) {
+        // Campaign enrichment is optional for customer catalog; do not break product listing.
+        console.warn('[customerService] campaign enrichment skipped:', String(error?.message || error));
+        campaigns = [];
+    }
     const campaignsByVendor = new Map();
     for (const c of campaigns) {
         const k = String(c.vendorProfileId);
