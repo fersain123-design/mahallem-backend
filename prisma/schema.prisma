@@ -402,6 +402,7 @@ model VendorProfile {
   storeLogoImageUrl  String?
   storeOpenOverride  Boolean?
   preparationMinutes Int?
+  deliveryMinMinutes Int?
   deliveryMinutes    Int?
   deliveryMaxMinutes Int?
   minimumOrderAmount Float?
@@ -444,6 +445,7 @@ model VendorProfile {
   @@index([status])
   @@index([businessType])
   @@index([preparationMinutes])
+  @@index([deliveryMinMinutes])
   @@index([deliveryMinutes])
   @@index([deliveryMaxMinutes])
   @@index([deliveryCoverage])
