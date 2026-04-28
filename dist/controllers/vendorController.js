@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteCampaign = exports.updateCampaign = exports.getCampaigns = exports.createCampaign = exports.getDashboard = exports.updateOrderStatus = exports.getOrderById = exports.getOrders = exports.replyToProductReview = exports.getProductReviews = exports.deleteProduct = exports.updateProduct = exports.deleteCategory = exports.updateCategory = exports.createCategory = exports.getCategories = exports.lookupProductByBarcode = exports.createProduct = exports.getProductById = exports.getProducts = exports.createPayoutRequest = exports.getPayoutById = exports.getPayouts = exports.requestIbanChange = exports.updateBankAccount = exports.getBankAccount = exports.uploadImage = exports.uploadDocument = exports.uploadTaxSheet = exports.markNotificationAsRead = exports.getNotifications = exports.deleteStoreImage = exports.uploadStoreImage = exports.updateStorefront = exports.getStorefront = exports.updateDeliverySettings = exports.getDeliverySettings = exports.requestDeliveryCoverageChange = exports.updateProfile = exports.getProfile = void 0;
+exports.deleteCampaign = exports.updateCampaign = exports.getCampaigns = exports.createCampaign = exports.getDashboard = exports.updateOrderStatus = exports.getOrderById = exports.getOrders = exports.replyToProductReview = exports.getProductReviews = exports.deleteProduct = exports.updateProduct = exports.deleteCategory = exports.updateCategory = exports.createCategory = exports.getCategories = exports.getCategorySmartSuggestions = exports.lookupProductByBarcode = exports.createProduct = exports.getProductById = exports.getProducts = exports.createPayoutRequest = exports.getPayoutById = exports.getPayouts = exports.requestIbanChange = exports.updateBankAccount = exports.getBankAccount = exports.uploadImage = exports.uploadDocument = exports.uploadTaxSheet = exports.markNotificationAsRead = exports.getNotifications = exports.deleteStoreImage = exports.uploadStoreImage = exports.updateStorefront = exports.getStorefront = exports.updateDeliverySettings = exports.getDeliverySettings = exports.requestDeliveryCoverageChange = exports.updateProfile = exports.getProfile = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const http_1 = __importDefault(require("http"));
@@ -46,6 +46,7 @@ const vendorService = __importStar(require("../services/vendorService"));
 const db_1 = __importDefault(require("../config/db"));
 const zod_1 = require("zod");
 const validationSchemas_1 = require("../utils/validationSchemas");
+const logger_1 = require("../utils/logger");
 const IMAGE_CLEANER_URL = process.env.IMAGE_CLEANER_URL?.trim() || '';
 const IMAGE_CLEANER_TIMEOUT_MS = Number(process.env.IMAGE_CLEANER_TIMEOUT_MS || 120000);
 const IMAGE_CLEANER_AUTO_ENSURE = String(process.env.IMAGE_CLEANER_AUTO_ENSURE || '0') !== '0';
@@ -1169,23 +1170,33 @@ const lookupProductByBarcode = async (req, res, next) => {
             res.status(401).json({ success: false, message: 'Unauthorized' });
             return;
         }
+        const scannedBarcode = String(req.body?.barcode || '');
+        logger_1.logger.debug('[BARCODE] scanned barcode', { barcode: scannedBarcode });
         const payload = validationSchemas_1.LookupBarcodeSchema.parse(req.body);
-        console.log('BARCODE_REQUEST', {
+        logger_1.logger.debug('[BARCODE] normalized barcode', { barcode: String(payload.barcode || '').trim() });
+        logger_1.logger.debug('[BARCODE] validation result', {
+            barcode: String(payload.barcode || '').trim(),
+            isValid: true,
+            reason: 'schema_valid',
+        });
+        logger_1.logger.debug('[BARCODE] local DB lookup', {
             vendorUserId: req.user.userId,
             barcode: String(payload.barcode || '').trim(),
         });
         const result = await vendorService.lookupProductByBarcode(req.user.userId, payload.barcode);
         if (result.found) {
-            console.log('BARCODE_RESULT', {
+            logger_1.logger.info('[BARCODE] product found', {
                 barcode: String(payload.barcode || '').trim(),
                 source: result.source,
                 name: String(result.product?.name || ''),
             });
         }
         else {
-            console.log('BARCODE_NOT_FOUND', {
+            logger_1.logger.info('[BARCODE] product not found', {
                 barcode: String(payload.barcode || '').trim(),
+                found: false,
                 source: result.source,
+                errorCode: result.errorCode,
             });
         }
         res.status(200).json({ success: true, data: result });
@@ -1195,6 +1206,23 @@ const lookupProductByBarcode = async (req, res, next) => {
     }
 };
 exports.lookupProductByBarcode = lookupProductByBarcode;
+const getCategorySmartSuggestions = async (req, res, next) => {
+    try {
+        if (!req.user) {
+            res.status(401).json({ success: false, message: 'Unauthorized' });
+            return;
+        }
+        const categoryId = String(req.query.categoryId || '').trim();
+        const subCategoryId = String(req.query.subCategoryId || '').trim();
+        const limit = Math.min(12, Math.max(1, Number(req.query.limit || 6)));
+        const suggestions = await vendorService.getCategorySmartSuggestions(req.user.userId, categoryId, subCategoryId || undefined, limit);
+        res.status(200).json({ success: true, data: suggestions });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.getCategorySmartSuggestions = getCategorySmartSuggestions;
 const getCategories = async (req, res, next) => {
     try {
         if (!req.user) {

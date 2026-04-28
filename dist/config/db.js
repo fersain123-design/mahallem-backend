@@ -1,7 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const client_1 = require("@prisma/client");
+const rawLogLevel = String(process.env.LOG_LEVEL || '').trim().toLowerCase();
+const logLevel = rawLogLevel === 'debug' || rawLogLevel === 'error' ? rawLogLevel : 'info';
+const prismaLog = logLevel === 'debug'
+    ? ['query', 'info', 'warn', 'error']
+    : logLevel === 'error'
+        ? ['error']
+        : ['info', 'warn', 'error'];
 const prisma = new client_1.PrismaClient({
-    log: ['query', 'info', 'warn', 'error'],
+    log: prismaLog,
 });
 exports.default = prisma;

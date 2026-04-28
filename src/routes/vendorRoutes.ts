@@ -135,17 +135,23 @@ router.get(
   requireRole(['VENDOR']),
   vendorController.getProducts
 );
-router.get(
-  '/products/:id',
-  authMiddleware,
-  requireRole(['VENDOR']),
-  vendorController.getProductById
-);
 router.post(
   '/products/lookup-barcode',
   authMiddleware,
   requireRole(['VENDOR']),
   vendorControllerAny.lookupProductByBarcode
+);
+router.get(
+  '/products/smart-suggestions',
+  authMiddleware,
+  requireRole(['VENDOR']),
+  vendorController.getCategorySmartSuggestions
+);
+router.get(
+  '/products/:id',
+  authMiddleware,
+  requireRole(['VENDOR']),
+  vendorController.getProductById
 );
 router.post(
   '/products',

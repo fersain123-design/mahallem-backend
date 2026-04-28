@@ -80,8 +80,9 @@ router.post('/payouts/request', authMiddleware_1.authMiddleware, (0, requireRole
 router.get('/payouts/:id', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorController.getPayoutById);
 // Products
 router.get('/products', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorController.getProducts);
-router.get('/products/:id', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorController.getProductById);
 router.post('/products/lookup-barcode', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorControllerAny.lookupProductByBarcode);
+router.get('/products/smart-suggestions', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorController.getCategorySmartSuggestions);
+router.get('/products/:id', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorController.getProductById);
 router.post('/products', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorController.createProduct);
 router.get('/categories', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorController.getCategories);
 router.post('/categories', authMiddleware_1.authMiddleware, (0, requireRole_1.requireRole)(['VENDOR']), vendorController.createCategory);

@@ -3,9 +3,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.errorHandler = exports.AppError = void 0;
 const zod_1 = require("zod");
 class AppError extends Error {
-    constructor(statusCode, message) {
+    constructor(statusCode, message, code) {
         super(message);
         this.statusCode = statusCode;
+        this.code = code;
         this.name = 'AppError';
     }
 }
@@ -18,13 +19,16 @@ _next) => {
         res.status(error.statusCode).json({
             success: false,
             message: error.message,
+            ...(error.code ? { code: error.code } : {}),
         });
         return;
     }
     if (error instanceof zod_1.ZodError) {
+        const hasBarcodeError = error.errors.some((e) => Array.isArray(e.path) ? e.path.some((segment) => String(segment) === 'barcode') : false);
         res.status(400).json({
             success: false,
             message: 'Validation error',
+            ...(hasBarcodeError ? { code: 'invalid_barcode' } : {}),
             errors: error.errors.map((e) => ({
                 path: e.path.join('.'),
                 message: e.message,

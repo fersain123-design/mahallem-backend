@@ -18,8 +18,17 @@ import {
   enqueueProductProcessingJob,
   isProductProcessingQueueEnabled,
 } from './productProcessingQueue';
-import { QueuedProductImageInput } from './productImageProcessingService';
-import { lookupOpenFoodFactsByBarcode } from './openFoodFactsService';
+import { processQueuedProductImage, QueuedProductImageInput } from './productImageProcessingService';
+import sharp from 'sharp';
+import {
+  lookupOpenFoodFactsByBarcodeDetailed,
+  OpenFoodFactsLookupError,
+} from './openFoodFactsService';
+import { BARCODE_INVALID_MESSAGE, normalizeBarcodeInput, validateBarcode } from '../utils/barcode';
+import { mapBarcodeProductToMahallemCategory } from '../utils/categoryMapper';
+import { cleanProductName } from '../utils/productNameCleaner';
+import { logger } from '../utils/logger';
+import { buildProductGroupInfo, buildSearchTokens } from '../utils/productIntelligence';
 
 export const getProductReviews = async (productId: string, vendorUserId: string) => {
   const product = await prisma.product.findUnique({
@@ -141,13 +150,26 @@ const mapPayoutWithFinancials = (payout: any, fallbackCommissionRate: number) =>
 };
 const SPECIAL_CATEGORY_SLUG = 'ozel-urunler';
 const BARCODE_LOOKUP_OFF_FALLBACK_ENABLED = String(process.env.BARCODE_ENABLE_OFF_FALLBACK || '1') !== '0';
+const BARCODE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const BARCODE_IMAGE_MIN_WIDTH = Math.max(80, Number(process.env.BARCODE_IMAGE_MIN_WIDTH || 240));
+const BARCODE_IMAGE_MIN_HEIGHT = Math.max(80, Number(process.env.BARCODE_IMAGE_MIN_HEIGHT || 240));
+const BARCODE_REFRESH_TIMEOUT_MS = Math.max(2000, Number(process.env.BARCODE_REFRESH_TIMEOUT_MS || 10000));
 
-const normalizeBarcode = (value: unknown): string => String(value ?? '').trim();
-type BarcodeLookupSource = 'database' | 'open_food_facts';
+const barcodeLookupInFlight = new Map<string, Promise<BarcodeLookupResult>>();
+
+const normalizeBarcode = (value: unknown): string => normalizeBarcodeInput(value);
+type BarcodeLookupSource = 'database' | 'open_food_facts' | 'barcode_cache' | 'global_pool';
+type BarcodeLookupStatus = 'found' | 'not_found' | 'invalid' | 'timeout' | 'api_error';
+type BarcodeLookupErrorCode = 'invalid_barcode' | 'not_found' | 'duplicate' | 'api_error' | 'timeout';
 
 type BarcodeLookupResult = {
   found: boolean;
   source: BarcodeLookupSource;
+  normalizedBarcode: string;
+  lookupStatus: BarcodeLookupStatus;
+  errorCode: BarcodeLookupErrorCode | null;
+  alreadyExistsInVendorStore: boolean;
+  productId: string | null;
   product: {
     barcode: string;
     name: string;
@@ -155,6 +177,12 @@ type BarcodeLookupResult = {
     imageUrl: string;
     quantity: string;
     category: string;
+    suggestedCategory: string;
+    categoryConfidence: number;
+    matchedKeywords: string[];
+    categoryMappingSource: 'local-category-mapper' | 'vendor-catalog' | 'barcode-learning';
+    source: 'mahallem_db' | 'barcode_api';
+    barcodeLookupStatus: BarcodeLookupStatus;
   } | null;
 };
 
@@ -1174,6 +1202,536 @@ export const getVendorProducts = async (
   };
 };
 
+export const getCategorySmartSuggestions = async (
+  userId: string,
+  categoryId: string,
+  subCategoryId?: string,
+  limit: number = 6
+) => {
+  const vendor = await prisma.vendorProfile.findUnique({
+    where: { userId },
+    select: { id: true },
+  });
+
+  if (!vendor) {
+    throw new AppError(404, 'Vendor profile not found');
+  }
+
+  const normalizedCategoryId = String(categoryId || '').trim();
+  if (!normalizedCategoryId) {
+    throw new AppError(400, 'Category is required');
+  }
+
+  const normalizedSubCategoryId = String(subCategoryId || '').trim();
+
+  const topSold = await prisma.orderItem.groupBy({
+    by: ['productId'],
+    where: {
+      order: {
+        status: 'DELIVERED',
+        paymentStatus: 'PAID',
+      },
+      product: {
+        categoryId: normalizedCategoryId,
+        ...(normalizedSubCategoryId ? { subCategoryId: normalizedSubCategoryId } : {}),
+      },
+    },
+    _sum: { quantity: true },
+    _count: { productId: true },
+    orderBy: {
+      _sum: {
+        quantity: 'desc',
+      },
+    },
+    take: Math.min(Math.max(limit, 1), 12),
+  });
+
+  const products = await prisma.product.findMany({
+    where: {
+      id: { in: topSold.map((item) => String(item.productId)) },
+      isActive: true,
+      approvalStatus: 'APPROVED',
+    },
+    select: {
+      id: true,
+      name: true,
+      imageUrl: true,
+      images: { orderBy: { sortOrder: 'asc' }, take: 1, select: { imageUrl: true } },
+      category: { select: { name: true } },
+      subCategory: { select: { name: true } },
+      barcode: true,
+      price: true,
+      unit: true,
+    },
+  });
+
+  const byProductId = new Map(products.map((item) => [String(item.id), item]));
+
+  return topSold
+    .map((item) => {
+      const product = byProductId.get(String(item.productId));
+      if (!product) return null;
+
+      return {
+        id: String(product.id),
+        name: String(product.name || '').trim(),
+        imageUrl:
+          String(product.images?.[0]?.imageUrl || '').trim() ||
+          String(product.imageUrl || '').trim() ||
+          null,
+        category:
+          String(product.subCategory?.name || '').trim() ||
+          String(product.category?.name || '').trim() ||
+          '',
+        barcode: String(product.barcode || '').trim() || null,
+        unit: String(product.unit || '').trim() || null,
+        price: Number(product.price || 0),
+        soldCount: Number(item._sum.quantity || 0),
+        orderCount: Number(item._count.productId || 0),
+      };
+    })
+    .filter(Boolean);
+};
+
+const isCacheFresh = (lastFetchedAt: Date | string | null | undefined): boolean => {
+  if (!lastFetchedAt) return false;
+  const fetchedAt = new Date(lastFetchedAt).getTime();
+  if (!Number.isFinite(fetchedAt)) return false;
+  return Date.now() - fetchedAt <= BARCODE_CACHE_TTL_MS;
+};
+
+const isPlaceholderImage = (imageUrl: string): boolean => {
+  const normalized = String(imageUrl || '').trim().toLocaleLowerCase('tr-TR');
+  if (!normalized) return true;
+  return /placeholder|default-image|no-image|image-not-available|dummy/i.test(normalized);
+};
+
+const isImageUrlQualityAcceptable = async (imageUrl: string): Promise<boolean> => {
+  const normalized = String(imageUrl || '').trim();
+  if (!normalized || isPlaceholderImage(normalized)) {
+    return false;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), BARCODE_REFRESH_TIMEOUT_MS);
+
+    const response = await fetch(normalized, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { Accept: 'image/*' },
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const metadata = await sharp(Buffer.from(arrayBuffer)).metadata();
+    const width = Number(metadata.width || 0);
+    const height = Number(metadata.height || 0);
+
+    return width >= BARCODE_IMAGE_MIN_WIDTH && height >= BARCODE_IMAGE_MIN_HEIGHT;
+  } catch {
+    return false;
+  }
+};
+
+const parseRawBarcodeApiResponse = (raw: unknown): Record<string, any> => {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof raw === 'object') return raw as Record<string, any>;
+  return {};
+};
+
+const resolveLearningCategory = async (barcode: string): Promise<string | null> => {
+  const topLearning = await prismaAny.barcodeCategoryLearning.findFirst({
+    where: {
+      barcode,
+      count: { gte: 3 },
+    },
+    orderBy: [{ count: 'desc' }, { updatedAt: 'desc' }],
+  });
+
+  const learned = String(topLearning?.selectedCategory || '').trim();
+  return learned || null;
+};
+
+const persistBarcodeLookupCache = async (args: {
+  barcode: string;
+  name: string;
+  brand: string;
+  image: string;
+  rawApiResponse?: unknown;
+}) => {
+  const { barcode, name, brand, image, rawApiResponse } = args;
+  await prismaAny.barcodeCache.upsert({
+    where: { barcode },
+    update: {
+      name,
+      brand,
+      image,
+      rawApiResponse: rawApiResponse ? JSON.stringify(rawApiResponse) : null,
+      lastFetchedAt: new Date(),
+    },
+    create: {
+      barcode,
+      name,
+      brand,
+      image,
+      rawApiResponse: rawApiResponse ? JSON.stringify(rawApiResponse) : null,
+      lastFetchedAt: new Date(),
+    },
+  });
+};
+
+const upsertGlobalProduct = async (args: {
+  barcode: string;
+  name: string;
+  brand: string;
+  image: string;
+  category: string;
+}) => {
+  const { barcode, name, brand, image, category } = args;
+  const grouping = buildProductGroupInfo({ name, brand });
+
+  await prismaAny.productGroup.upsert({
+    where: { key: grouping.groupKey },
+    update: {
+      name: grouping.normalizedName || name,
+      brand: grouping.normalizedBrand || brand || null,
+      productType: grouping.productType || null,
+    },
+    create: {
+      key: grouping.groupKey,
+      name: grouping.normalizedName || name,
+      brand: grouping.normalizedBrand || brand || null,
+      productType: grouping.productType || null,
+    },
+  });
+
+  await prismaAny.globalProduct.upsert({
+    where: { barcode },
+    update: {
+      name,
+      brand: brand || null,
+      image: image || null,
+      category: category || null,
+      groupKey: grouping.groupKey,
+    },
+    create: {
+      barcode,
+      name,
+      brand: brand || null,
+      image: image || null,
+      category: category || null,
+      groupKey: grouping.groupKey,
+    },
+  });
+};
+
+const upsertProductSearchIndex = async (product: any) => {
+  const normalizedNameInput = String(product?.name || '').trim();
+  if (!normalizedNameInput) return;
+
+  const searchable = buildSearchTokens({
+    name: product?.name,
+    brand: product?.brand || '',
+    category: String(product?.subCategory?.name || product?.category?.name || '').trim(),
+  });
+
+  await prismaAny.productSearchIndex.upsert({
+    where: { productId: String(product.id) },
+    update: {
+      normalizedName: searchable.normalizedName || normalizedNameInput,
+      tokens: searchable.tokens.join(' '),
+      brand: searchable.brand || null,
+      category: searchable.category || null,
+    },
+    create: {
+      productId: String(product.id),
+      normalizedName: searchable.normalizedName || normalizedNameInput,
+      tokens: searchable.tokens.join(' '),
+      brand: searchable.brand || null,
+      category: searchable.category || null,
+    },
+  });
+};
+
+type BarcodeAnalyticsEvent = 'scan_found' | 'scan_not_found' | 'manual_entry';
+
+const trackBarcodeAnalytics = async (args: {
+  eventType: BarcodeAnalyticsEvent;
+  barcode?: string | null;
+  productName?: string | null;
+  category?: string | null;
+}) => {
+  const eventType = String(args.eventType || '').trim();
+  if (!eventType) return;
+
+  const normalizedBarcode = normalizeBarcode(args.barcode || '');
+  const normalizedName = String(args.productName || '').trim().toLocaleLowerCase('tr-TR');
+  const normalizedCategory = String(args.category || '').trim();
+
+  const eventKey = [
+    eventType,
+    normalizedBarcode || '-',
+    normalizedName || '-',
+    normalizedCategory || '-',
+  ].join('|');
+
+  await prismaAny.barcodeAnalytics.upsert({
+    where: { eventKey },
+    update: {
+      count: { increment: 1 },
+      lastSeenAt: new Date(),
+    },
+    create: {
+      eventKey,
+      eventType,
+      barcode: normalizedBarcode || null,
+      productName: normalizedName || null,
+      category: normalizedCategory || null,
+      count: 1,
+      lastSeenAt: new Date(),
+    },
+  });
+};
+
+const normalizeExternalBarcodeImage = async (imageUrl: string, barcode: string): Promise<string> => {
+  const normalized = String(imageUrl || '').trim();
+  if (!normalized) return '';
+
+  try {
+    const processed = await processQueuedProductImage(
+      {
+        kind: 'url',
+        url: normalized,
+      },
+      `barcode_${barcode}`
+    );
+    return String(processed || '').trim();
+  } catch (error: any) {
+    logger.debug('[BARCODE] image standardization fallback to source image', {
+      barcode,
+      message: String(error?.message || 'Unknown standardization error'),
+    });
+    return normalized;
+  }
+};
+
+const buildFoundBarcodeLookup = (args: {
+  source: BarcodeLookupSource;
+  normalizedBarcode: string;
+  name: string;
+  brand: string;
+  imageUrl: string;
+  quantity: string;
+  category: string;
+  suggestedCategory: string;
+  categoryConfidence: number;
+  matchedKeywords: string[];
+  categoryMappingSource: 'local-category-mapper' | 'vendor-catalog' | 'barcode-learning';
+}): BarcodeLookupResult => {
+  return {
+    found: true,
+    source: args.source,
+    normalizedBarcode: args.normalizedBarcode,
+    lookupStatus: 'found',
+    errorCode: null,
+    alreadyExistsInVendorStore: false,
+    productId: null,
+    product: {
+      barcode: args.normalizedBarcode,
+      name: args.name,
+      brand: args.brand,
+      imageUrl: args.imageUrl,
+      quantity: args.quantity,
+      category: args.category,
+      suggestedCategory: args.suggestedCategory,
+      categoryConfidence: args.categoryConfidence,
+      matchedKeywords: args.matchedKeywords,
+      categoryMappingSource: args.categoryMappingSource,
+      source: args.source === 'database' ? 'mahallem_db' : 'barcode_api',
+      barcodeLookupStatus: 'found',
+    },
+  };
+};
+
+const fetchAndPersistExternalBarcodeData = async (normalizedBarcode: string): Promise<BarcodeLookupResult> => {
+  const detailed = await lookupOpenFoodFactsByBarcodeDetailed(normalizedBarcode);
+  const offProduct = detailed.product;
+
+  if (!offProduct) {
+    return {
+      found: false,
+      source: 'open_food_facts',
+      normalizedBarcode,
+      lookupStatus: 'not_found',
+      errorCode: 'not_found',
+      alreadyExistsInVendorStore: false,
+      productId: null,
+      product: null,
+    };
+  }
+
+  const clean = cleanProductName(offProduct.name, offProduct.brand);
+  const categoryMapping = mapBarcodeProductToMahallemCategory({
+    product_name: clean.name,
+    generic_name: offProduct.genericName,
+    brands: clean.brand,
+    categories: offProduct.categories || offProduct.category,
+    category_tags: offProduct.categoryTags,
+    ingredients_text: offProduct.ingredientsText,
+    quantity: offProduct.quantity,
+    barcode: offProduct.barcode || normalizedBarcode,
+  });
+
+  const learnedCategory = await resolveLearningCategory(normalizedBarcode);
+  const effectiveCategory = String(learnedCategory || categoryMapping.category || '').trim();
+  const apiImageUrl = String(offProduct.imageUrl || '').trim();
+  const canUseApiImage = await isImageUrlQualityAcceptable(apiImageUrl);
+  const effectiveImage = canUseApiImage
+    ? await normalizeExternalBarcodeImage(apiImageUrl, normalizedBarcode)
+    : '';
+
+  const rawPayload = {
+    ...detailed.rawPayload,
+    normalized: {
+      barcode: normalizeBarcode(offProduct.barcode) || normalizedBarcode,
+      name: clean.name,
+      brand: clean.brand,
+      imageUrl: effectiveImage,
+      quantity: String(offProduct.quantity || '').trim(),
+      category: effectiveCategory,
+      categories: String(offProduct.categories || offProduct.category || '').trim(),
+      categoryTags: Array.isArray(offProduct.categoryTags) ? offProduct.categoryTags : [],
+      ingredientsText: String(offProduct.ingredientsText || '').trim(),
+    },
+  };
+
+  await persistBarcodeLookupCache({
+    barcode: normalizedBarcode,
+    name: clean.name,
+    brand: clean.brand,
+    image: effectiveImage,
+    rawApiResponse: rawPayload,
+  });
+
+  await upsertGlobalProduct({
+    barcode: normalizedBarcode,
+    name: clean.name,
+    brand: clean.brand,
+    image: effectiveImage,
+    category: effectiveCategory,
+  });
+
+  return buildFoundBarcodeLookup({
+    source: 'open_food_facts',
+    normalizedBarcode,
+    name: clean.name,
+    brand: clean.brand,
+    imageUrl: effectiveImage,
+    quantity: String(offProduct.quantity || '').trim(),
+    category: effectiveCategory,
+    suggestedCategory: effectiveCategory,
+    categoryConfidence: learnedCategory ? 0.95 : Number(categoryMapping.confidence || 0),
+    matchedKeywords: learnedCategory
+      ? ['barcode-learning-threshold']
+      : Array.isArray(categoryMapping.matchedKeywords)
+        ? categoryMapping.matchedKeywords
+        : [],
+    categoryMappingSource: learnedCategory ? 'barcode-learning' : categoryMapping.source,
+  });
+};
+
+const syncGlobalAndLearningFromVendorProduct = async (product: any) => {
+  const normalizedBarcode = normalizeBarcode(product?.barcode);
+  if (!normalizedBarcode) return;
+
+  const selectedCategoryName = String(product?.subCategory?.name || product?.category?.name || '').trim();
+  const imageFromGallery = String(product?.images?.[0]?.imageUrl || '').trim();
+  const imageFromProduct = String(product?.imageUrl || '').trim();
+  const sellerImage = imageFromGallery || imageFromProduct;
+
+  const cleaned = cleanProductName(product?.name || '');
+  const normalizedName = String(cleaned.name || product?.name || '').trim();
+
+  await upsertGlobalProduct({
+    barcode: normalizedBarcode,
+    name: normalizedName,
+    brand: '',
+    image: sellerImage,
+    category: selectedCategoryName,
+  });
+
+  if (!selectedCategoryName) return;
+
+  const learning = await prismaAny.barcodeCategoryLearning.upsert({
+    where: {
+      barcode_selectedCategory: {
+        barcode: normalizedBarcode,
+        selectedCategory: selectedCategoryName,
+      },
+    },
+    update: {
+      count: { increment: 1 },
+    },
+    create: {
+      barcode: normalizedBarcode,
+      selectedCategory: selectedCategoryName,
+      count: 1,
+    },
+  });
+
+  const productsWithBarcode = await prisma.product.findMany({
+    where: { barcode: normalizedBarcode },
+    select: {
+      vendorId: true,
+      category: { select: { name: true } },
+      subCategory: { select: { name: true } },
+    },
+  });
+
+  const distinctVendorCount = new Set(
+    productsWithBarcode
+      .filter((item) => {
+        const itemCategoryName = String(item?.subCategory?.name || item?.category?.name || '').trim();
+        return itemCategoryName === selectedCategoryName;
+      })
+      .map((item) => String(item.vendorId || '').trim())
+      .filter(Boolean)
+  ).size;
+
+  if (distinctVendorCount >= 3 && Number(learning?.count || 0) < 3) {
+    await prismaAny.barcodeCategoryLearning.update({
+      where: {
+        barcode_selectedCategory: {
+          barcode: normalizedBarcode,
+          selectedCategory: selectedCategoryName,
+        },
+      },
+      data: { count: 3 },
+    });
+  }
+
+  logger.debug('[BARCODE] category learning updated', {
+    barcode: normalizedBarcode,
+    selectedCategory: selectedCategoryName,
+    count: Math.max(Number(learning?.count || 0), distinctVendorCount >= 3 ? 3 : 0),
+    distinctVendorCount,
+  });
+};
+
 export const lookupProductByBarcode = async (userId: string, barcode: string): Promise<BarcodeLookupResult> => {
   const vendor = await prisma.vendorProfile.findUnique({
     where: { userId },
@@ -1185,7 +1743,19 @@ export const lookupProductByBarcode = async (userId: string, barcode: string): P
   }
 
   const normalizedBarcode = normalizeBarcode(barcode);
-  console.log('BARCODE_LOOKUP_START', { userId, barcode: normalizedBarcode });
+  logger.debug('[BARCODE] normalized barcode', { barcode: normalizedBarcode });
+
+  const validationResult = validateBarcode(normalizedBarcode);
+  logger.debug('[BARCODE] validation result', {
+    barcode: normalizedBarcode,
+    isValid: validationResult.isValid,
+    reason: validationResult.reason,
+  });
+  if (!validationResult.isValid) {
+    throw new AppError(400, BARCODE_INVALID_MESSAGE, 'invalid_barcode');
+  }
+
+  logger.debug('[BARCODE] local DB lookup', { vendorId: vendor.id, barcode: normalizedBarcode });
 
   const existingProduct = await prisma.product.findFirst({
     where: {
@@ -1200,15 +1770,29 @@ export const lookupProductByBarcode = async (userId: string, barcode: string): P
   });
 
   if (existingProduct) {
-    console.log('BARCODE_LOOKUP_DB_HIT', {
+    logger.info('[BARCODE] product found', {
       userId,
       barcode: normalizedBarcode,
       productId: existingProduct.id,
+      source: 'database',
+    });
+
+    await trackBarcodeAnalytics({
+      eventType: 'scan_found',
+      barcode: normalizedBarcode,
+      category:
+        String(existingProduct.subCategory?.name || '').trim() ||
+        String(existingProduct.category?.name || '').trim(),
     });
 
     return {
       found: true,
       source: 'database',
+      normalizedBarcode,
+      lookupStatus: 'found',
+      errorCode: null,
+      alreadyExistsInVendorStore: true,
+      productId: existingProduct.id,
       product: {
         barcode: normalizedBarcode,
         name: String(existingProduct.name || '').trim(),
@@ -1220,50 +1804,231 @@ export const lookupProductByBarcode = async (userId: string, barcode: string): P
         category:
           String(existingProduct.subCategory?.name || '').trim() ||
           String(existingProduct.category?.name || '').trim(),
+        suggestedCategory:
+          String(existingProduct.subCategory?.name || '').trim() ||
+          String(existingProduct.category?.name || '').trim(),
+        categoryConfidence: 1,
+        matchedKeywords: ['vendor-catalog-match'],
+        categoryMappingSource: 'vendor-catalog',
+        source: 'mahallem_db',
+        barcodeLookupStatus: 'found',
       },
     };
   }
 
-  if (!BARCODE_LOOKUP_OFF_FALLBACK_ENABLED) {
-    console.log('BARCODE_LOOKUP_DB_MISS_OFF_DISABLED', { userId, barcode: normalizedBarcode });
-    return { found: false, source: 'database', product: null };
+  const globalProduct = await prismaAny.globalProduct.findUnique({
+    where: { barcode: normalizedBarcode },
+  });
+
+  if (globalProduct) {
+    const learnedCategory = await resolveLearningCategory(normalizedBarcode);
+    const category = String(learnedCategory || globalProduct.category || '').trim();
+    const fromGlobal = buildFoundBarcodeLookup({
+      source: 'global_pool',
+      normalizedBarcode,
+      name: String(globalProduct.name || '').trim(),
+      brand: String(globalProduct.brand || '').trim(),
+      imageUrl: String(globalProduct.image || '').trim(),
+      quantity: '',
+      category,
+      suggestedCategory: category,
+      categoryConfidence: learnedCategory ? 0.95 : 0.88,
+      matchedKeywords: learnedCategory ? ['barcode-learning-threshold'] : ['global-pool-match'],
+      categoryMappingSource: learnedCategory ? 'barcode-learning' : 'vendor-catalog',
+    });
+
+    logger.info('[BARCODE] product found', {
+      barcode: normalizedBarcode,
+      source: 'global_pool',
+      name: fromGlobal.product?.name || '',
+    });
+
+    await trackBarcodeAnalytics({
+      eventType: 'scan_found',
+      barcode: normalizedBarcode,
+      category,
+    });
+
+    return fromGlobal;
   }
 
-  let offProduct: Awaited<ReturnType<typeof lookupOpenFoodFactsByBarcode>>;
+  const cacheRow = await prismaAny.barcodeCache.findUnique({
+    where: { barcode: normalizedBarcode },
+  });
+
+  if (cacheRow) {
+    const cachedRaw = parseRawBarcodeApiResponse(cacheRow.rawApiResponse);
+    const cachedNormalized = parseRawBarcodeApiResponse(cachedRaw.normalized);
+    const mappedCategory = String(cachedNormalized.category || '').trim();
+    const learnedCategory = await resolveLearningCategory(normalizedBarcode);
+    const effectiveCategory = learnedCategory || mappedCategory;
+
+    const cachedResult = buildFoundBarcodeLookup({
+      source: 'barcode_cache',
+      normalizedBarcode,
+      name: String(cacheRow.name || '').trim(),
+      brand: String(cacheRow.brand || '').trim(),
+      imageUrl: String(cacheRow.image || '').trim(),
+      quantity: String(cachedNormalized.quantity || '').trim(),
+      category: String(effectiveCategory || '').trim(),
+      suggestedCategory: String(effectiveCategory || '').trim(),
+      categoryConfidence: learnedCategory ? 0.95 : 0.84,
+      matchedKeywords: learnedCategory ? ['barcode-learning-threshold'] : ['cache-hit'],
+      categoryMappingSource: learnedCategory ? 'barcode-learning' : 'local-category-mapper',
+    });
+
+    if (isCacheFresh(cacheRow.lastFetchedAt)) {
+      logger.info('[BARCODE] product found', {
+        barcode: normalizedBarcode,
+        source: 'barcode_cache',
+        name: cachedResult.product?.name || '',
+      });
+      await trackBarcodeAnalytics({
+        eventType: 'scan_found',
+        barcode: normalizedBarcode,
+        category: String(effectiveCategory || '').trim(),
+      });
+      return cachedResult;
+    }
+
+    logger.info('[BARCODE] stale cache served and refresh scheduled', {
+      barcode: normalizedBarcode,
+    });
+
+    if (!barcodeLookupInFlight.has(normalizedBarcode)) {
+      const refreshPromise = (async () => {
+        try {
+          await fetchAndPersistExternalBarcodeData(normalizedBarcode);
+        } catch (error: any) {
+          logger.error('[BARCODE] stale refresh failed', {
+            barcode: normalizedBarcode,
+            message: String(error?.message || 'Unknown stale refresh error'),
+          });
+        } finally {
+          barcodeLookupInFlight.delete(normalizedBarcode);
+        }
+      })();
+      barcodeLookupInFlight.set(normalizedBarcode, refreshPromise as unknown as Promise<BarcodeLookupResult>);
+    }
+
+    return cachedResult;
+  }
+
+  if (!BARCODE_LOOKUP_OFF_FALLBACK_ENABLED) {
+    logger.info('[BARCODE] external API lookup skipped', {
+      barcode: normalizedBarcode,
+      skipped: true,
+      reason: 'disabled_by_env',
+    });
+    await trackBarcodeAnalytics({
+      eventType: 'scan_not_found',
+      barcode: normalizedBarcode,
+    });
+    return {
+      found: false,
+      source: 'database',
+      normalizedBarcode,
+      lookupStatus: 'not_found',
+      errorCode: 'not_found',
+      alreadyExistsInVendorStore: false,
+      productId: null,
+      product: null,
+    };
+  }
+
+  logger.debug('[BARCODE] external API lookup', { barcode: normalizedBarcode, provider: 'open_food_facts' });
+
+  const inFlight = barcodeLookupInFlight.get(normalizedBarcode);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const lookupPromise = (async () => {
+    try {
+      return await fetchAndPersistExternalBarcodeData(normalizedBarcode);
+    } catch (error: any) {
+      if (error instanceof OpenFoodFactsLookupError) {
+        const lookupStatus = error.code === 'timeout' ? 'timeout' : 'api_error';
+        return {
+          found: false,
+          source: 'open_food_facts',
+          normalizedBarcode,
+          lookupStatus,
+          errorCode: error.code,
+          alreadyExistsInVendorStore: false,
+          productId: null,
+          product: null,
+        } as BarcodeLookupResult;
+      }
+
+      logger.error('[BARCODE] external API lookup failed', {
+        barcode: normalizedBarcode,
+        message: String(error?.message || 'Unknown OFF lookup error'),
+      });
+
+      return {
+        found: false,
+        source: 'open_food_facts',
+        normalizedBarcode,
+        lookupStatus: 'api_error',
+        errorCode: 'api_error',
+        alreadyExistsInVendorStore: false,
+        productId: null,
+        product: null,
+      } as BarcodeLookupResult;
+    } finally {
+      barcodeLookupInFlight.delete(normalizedBarcode);
+    }
+  })();
+
+  barcodeLookupInFlight.set(normalizedBarcode, lookupPromise);
+
   try {
-    offProduct = await lookupOpenFoodFactsByBarcode(normalizedBarcode);
+    const result = await lookupPromise;
+    if (result.found) {
+      logger.info('[BARCODE] product found', {
+        barcode: normalizedBarcode,
+        source: result.source,
+        name: String(result.product?.name || ''),
+      });
+      await trackBarcodeAnalytics({
+        eventType: 'scan_found',
+        barcode: normalizedBarcode,
+        category: String(result.product?.category || '').trim(),
+      });
+    } else {
+      logger.info('[BARCODE] product not found', {
+        barcode: normalizedBarcode,
+        source: result.source,
+        errorCode: result.errorCode,
+      });
+      await trackBarcodeAnalytics({
+        eventType: 'scan_not_found',
+        barcode: normalizedBarcode,
+      });
+    }
+    return result;
   } catch (error: any) {
-    console.log('BARCODE_LOOKUP_OFF_ERROR', {
+    logger.error('[BARCODE] unexpected lookup error', {
       userId,
       barcode: normalizedBarcode,
       message: String(error?.message || 'Unknown OFF lookup error'),
     });
-    return { found: false, source: 'open_food_facts', product: null };
+    await trackBarcodeAnalytics({
+      eventType: 'scan_not_found',
+      barcode: normalizedBarcode,
+    });
+    return {
+      found: false,
+      source: 'open_food_facts',
+      normalizedBarcode,
+      lookupStatus: 'api_error',
+      errorCode: 'api_error',
+      alreadyExistsInVendorStore: false,
+      productId: null,
+      product: null,
+    };
   }
-
-  if (!offProduct) {
-    console.log('BARCODE_LOOKUP_OFF_MISS', { userId, barcode: normalizedBarcode });
-    return { found: false, source: 'open_food_facts', product: null };
-  }
-
-  console.log('BARCODE_LOOKUP_OFF_HIT', {
-    userId,
-    barcode: normalizedBarcode,
-    name: String(offProduct.name || ''),
-  });
-
-  return {
-    found: true,
-    source: 'open_food_facts',
-    product: {
-      barcode: normalizeBarcode(offProduct.barcode) || normalizedBarcode,
-      name: String(offProduct.name || '').trim(),
-      brand: String(offProduct.brand || '').trim(),
-      imageUrl: String(offProduct.imageUrl || '').trim(),
-      quantity: String(offProduct.quantity || '').trim(),
-      category: String(offProduct.category || '').trim(),
-    },
-  };
 };
 
 export const createProduct = async (
@@ -1337,11 +2102,11 @@ export const createProduct = async (
         vendorId: vendor.id,
         barcode: normalizedBarcode,
       },
-      select: { id: true },
+      select: { id: true, name: true },
     });
 
     if (existingBarcodeProduct) {
-      throw new AppError(400, 'Bu barkod ile kayitli bir urun zaten var');
+      throw new AppError(409, 'Bu barkod magazanda zaten kayitli. Mevcut urunu duzenleyebilirsin.', 'duplicate');
     }
   }
 
@@ -1386,6 +2151,14 @@ export const createProduct = async (
       images: true,
     },
   });
+
+  if (normalizedBarcode) {
+    logger.info('[BARCODE] saved product barcode', {
+      vendorId: vendor.id,
+      productId: product.id,
+      barcode: normalizedBarcode,
+    });
+  }
 
   if (shouldQueueImageProcessing) {
     if (!isProductProcessingQueueEnabled()) {
@@ -1442,6 +2215,23 @@ export const createProduct = async (
     },
   });
 
+  if (normalizedBarcode) {
+    await syncGlobalAndLearningFromVendorProduct(product as any);
+    await trackBarcodeAnalytics({
+      eventType: 'scan_found',
+      barcode: normalizedBarcode,
+      category: String(product?.subCategory?.name || product?.category?.name || '').trim(),
+    });
+  } else {
+    await trackBarcodeAnalytics({
+      eventType: 'manual_entry',
+      productName: String(product?.name || '').trim(),
+      category: String(product?.subCategory?.name || product?.category?.name || '').trim(),
+    });
+  }
+
+  await upsertProductSearchIndex(product as any);
+
   return product;
 };
 
@@ -1495,11 +2285,11 @@ export const updateProduct = async (
           barcode: normalizedBarcode,
           id: { not: productId },
         },
-        select: { id: true },
+        select: { id: true, name: true },
       });
 
       if (existingBarcodeProduct) {
-        throw new AppError(400, 'Bu barkod ile kayitli bir urun zaten var');
+        throw new AppError(409, 'Bu barkod magazanda zaten kayitli. Mevcut urunu duzenleyebilirsin.', 'duplicate');
       }
     }
   }
@@ -1539,6 +2329,14 @@ export const updateProduct = async (
     },
   });
 
+  if (data.barcode !== undefined) {
+    logger.info('[BARCODE] saved product barcode', {
+      vendorId: product.vendorId,
+      productId: updated.id,
+      barcode: normalizeBarcode(data.barcode) || null,
+    });
+  }
+
   if (data.price !== undefined) {
     await (prisma as any).sellerProduct.upsert({
       where: {
@@ -1557,6 +2355,12 @@ export const updateProduct = async (
       },
     });
   }
+
+  if (data.barcode !== undefined) {
+    await syncGlobalAndLearningFromVendorProduct(updated as any);
+  }
+
+  await upsertProductSearchIndex(updated as any);
 
   return updated;
 };

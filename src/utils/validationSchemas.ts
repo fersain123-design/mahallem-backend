@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BARCODE_INVALID_MESSAGE, normalizeBarcodeInput, validateBarcode } from './barcode';
 
 // Auth Schemas
 export const RegisterSchema = z.object({
@@ -357,6 +358,22 @@ const CreateProductImageJobSchema = z
     }
   });
 
+const OptionalBarcodeSchema = z.preprocess(
+  (value) => {
+    const normalized = normalizeBarcodeInput(value);
+    return normalized ? normalized : undefined;
+  },
+  z
+    .string()
+    .refine((value) => validateBarcode(value).isValid, BARCODE_INVALID_MESSAGE)
+    .optional()
+);
+
+const RequiredBarcodeSchema = z.preprocess(
+  (value) => normalizeBarcodeInput(value),
+  z.string().refine((value) => validateBarcode(value).isValid, BARCODE_INVALID_MESSAGE)
+);
+
 export const CreateProductSchema = z.object({
   categoryId: z.string().min(1).optional(),
   categoryName: z.string().min(2).optional(),
@@ -368,11 +385,7 @@ export const CreateProductSchema = z.object({
   price: z.number().positive('Price must be positive'),
   stock: z.number().int().nonnegative('Stock cannot be negative'),
   unit: z.string().min(1, 'Unit is required'),
-  barcode: z
-    .string()
-    .trim()
-    .regex(/^\d{8,14}$/, 'Barkod 8 ile 14 hane arasinda numerik olmalidir')
-    .optional(),
+  barcode: OptionalBarcodeSchema,
   imageUrl: z.string().url().optional(),
   images: z.array(z.string().min(1)).optional(),
   imageJobs: z.array(CreateProductImageJobSchema).optional(),
@@ -391,11 +404,7 @@ export const UpdateProductSchema = z.object({
   price: z.number().positive().optional(),
   stock: z.number().int().nonnegative().optional(),
   unit: z.string().min(1).optional(),
-  barcode: z
-    .string()
-    .trim()
-    .regex(/^\d{8,14}$/, 'Barkod 8 ile 14 hane arasinda numerik olmalidir')
-    .optional(),
+  barcode: OptionalBarcodeSchema,
   imageUrl: z.string().url().optional(),
   images: z.array(z.string().min(1)).optional(),
   status: z.enum(['active', 'inactive']).optional(),
@@ -403,10 +412,7 @@ export const UpdateProductSchema = z.object({
 });
 
 export const LookupBarcodeSchema = z.object({
-  barcode: z
-    .string()
-    .trim()
-    .regex(/^\d{8,14}$/, 'Barkod 8 ile 14 hane arasinda numerik olmalidir'),
+  barcode: RequiredBarcodeSchema,
 });
 
 export const CreateVendorCategorySchema = z.object({

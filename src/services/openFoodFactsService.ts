@@ -1,3 +1,5 @@
+import { logger } from '../utils/logger';
+
 export type OpenFoodFactsRawProductResponse = {
   code?: string;
   status?: number;
@@ -5,20 +7,44 @@ export type OpenFoodFactsRawProductResponse = {
   product?: {
     code?: string;
     product_name?: string;
+    generic_name?: string;
     brands?: string;
     quantity?: string;
     image_url?: string;
     categories?: string;
+    category_tags?: string[];
+    ingredients_text?: string;
   };
 };
 
 export type OpenFoodFactsNormalizedProduct = {
   barcode: string;
   name: string;
+  genericName: string;
   brand: string;
   imageUrl: string;
   quantity: string;
   category: string;
+  categories: string;
+  categoryTags: string[];
+  ingredientsText: string;
+};
+
+export type OpenFoodFactsLookupErrorCode = 'timeout' | 'api_error';
+
+export class OpenFoodFactsLookupError extends Error {
+  constructor(
+    message: string,
+    public code: OpenFoodFactsLookupErrorCode
+  ) {
+    super(message);
+    this.name = 'OpenFoodFactsLookupError';
+  }
+}
+
+export type OpenFoodFactsLookupResult = {
+  product: OpenFoodFactsNormalizedProduct | null;
+  rawPayload: OpenFoodFactsRawProductResponse | null;
 };
 
 const OFF_API_BASE_URL =
@@ -27,7 +53,8 @@ const OFF_API_BASE_URL =
     .replace(/\/+$/, '');
 
 const OFF_API_TIMEOUT_MS = Math.max(1500, Number(process.env.OFF_API_TIMEOUT_MS || 10000));
-const OFF_FIELDS = 'code,product_name,brands,quantity,image_url,categories,status,status_verbose';
+const OFF_FIELDS =
+  'code,product_name,generic_name,brands,quantity,image_url,categories,category_tags,ingredients_text,status,status_verbose';
 
 const asText = (value: unknown) => String(value ?? '').trim();
 
@@ -65,7 +92,7 @@ export const fetchOpenFoodFactsProduct = async (
 
   try {
     const url = `${OFF_API_BASE_URL}/product/${encodeURIComponent(normalizedBarcode)}?fields=${encodeURIComponent(OFF_FIELDS)}`;
-    console.log('OFF_REQUEST', {
+    logger.debug('OFF_REQUEST', {
       barcode: normalizedBarcode,
       timeoutMs: OFF_API_TIMEOUT_MS,
       url,
@@ -80,15 +107,15 @@ export const fetchOpenFoodFactsProduct = async (
     });
 
     if (!response.ok) {
-      console.log('OFF_RESPONSE_ERROR', {
+      logger.error('OFF_RESPONSE_ERROR', {
         barcode: normalizedBarcode,
         status: response.status,
       });
-      return null;
+      throw new OpenFoodFactsLookupError(`OFF returned status ${response.status}`, 'api_error');
     }
 
     const payload = (await response.json()) as OpenFoodFactsRawProductResponse;
-    console.log('OFF_RESPONSE_OK', {
+    logger.debug('OFF_RESPONSE_OK', {
       barcode: normalizedBarcode,
       status: payload?.status,
       hasProduct: Boolean(payload?.product),
@@ -99,12 +126,20 @@ export const fetchOpenFoodFactsProduct = async (
     const timeoutLike =
       String(error?.name || '').toLowerCase() === 'aborterror' ||
       String(error?.message || '').toLowerCase().includes('abort');
-    console.log('OFF_REQUEST_FAILED', {
+    logger.error('OFF_REQUEST_FAILED', {
       barcode: normalizedBarcode,
       timeoutLike,
       message: String(error?.message || 'Unknown OFF request failure'),
     });
-    return null;
+
+    if (error instanceof OpenFoodFactsLookupError) {
+      throw error;
+    }
+
+    throw new OpenFoodFactsLookupError(
+      String(error?.message || 'Unknown OFF request failure'),
+      timeoutLike ? 'timeout' : 'api_error'
+    );
   } finally {
     clearTimeout(timeoutId);
   }
@@ -126,10 +161,18 @@ export const normalizeOpenFoodFactsProduct = (
   const normalized: OpenFoodFactsNormalizedProduct = {
     barcode: asText(product.code || rawPayload.code || barcode),
     name: pickFirstNonEmpty([product.product_name]),
+    genericName: pickFirstNonEmpty([product.generic_name]),
     brand: pickFirstNonEmpty([product.brands]),
     imageUrl: pickFirstNonEmpty([product.image_url]),
     quantity: pickFirstNonEmpty([product.quantity]),
     category: pickFirstNonEmpty([product.categories, categoryFromTags(product.categories)]),
+    categories: pickFirstNonEmpty([product.categories]),
+    categoryTags: Array.isArray(product.category_tags)
+      ? product.category_tags
+          .map((item) => asText(item))
+          .filter(Boolean)
+      : [],
+    ingredientsText: pickFirstNonEmpty([product.ingredients_text]),
   };
 
   if (!normalized.name) {
@@ -144,4 +187,14 @@ export const lookupOpenFoodFactsByBarcode = async (
 ): Promise<OpenFoodFactsNormalizedProduct | null> => {
   const raw = await fetchOpenFoodFactsProduct(barcode);
   return normalizeOpenFoodFactsProduct(barcode, raw);
+};
+
+export const lookupOpenFoodFactsByBarcodeDetailed = async (
+  barcode: string
+): Promise<OpenFoodFactsLookupResult> => {
+  const raw = await fetchOpenFoodFactsProduct(barcode);
+  return {
+    product: normalizeOpenFoodFactsProduct(barcode, raw),
+    rawPayload: raw,
+  };
 };

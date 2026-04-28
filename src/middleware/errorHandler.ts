@@ -4,7 +4,8 @@ import { ZodError } from 'zod';
 class AppError extends Error {
   constructor(
     public statusCode: number,
-    message: string
+    message: string,
+    public code?: string
   ) {
     super(message);
     this.name = 'AppError';
@@ -26,14 +27,20 @@ export const errorHandler = (
     res.status(error.statusCode).json({
       success: false,
       message: error.message,
+      ...(error.code ? { code: error.code } : {}),
     });
     return;
   }
 
   if (error instanceof ZodError) {
+    const hasBarcodeError = error.errors.some((e) =>
+      Array.isArray(e.path) ? e.path.some((segment) => String(segment) === 'barcode') : false
+    );
+
     res.status(400).json({
       success: false,
       message: 'Validation error',
+      ...(hasBarcodeError ? { code: 'invalid_barcode' } : {}),
       errors: error.errors.map((e) => ({
         path: e.path.join('.'),
         message: e.message,

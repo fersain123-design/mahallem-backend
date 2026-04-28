@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UpdateDeliveryFeeBandsSchema = exports.DeliveryFeeBandSchema = exports.RejectProductForPricingSchema = exports.ToggleProductActiveSchema = exports.ReviewVendorDocumentSchema = exports.DeactivateVendorSchema = exports.RejectVendorSchema = exports.ApproveVendorSchema = exports.CancelOrderSchema = exports.CreatePayoutRequestSchema = exports.UpdateOrderStatusSchema = exports.UpdateVendorCategorySchema = exports.CreateVendorCategorySchema = exports.LookupBarcodeSchema = exports.UpdateProductSchema = exports.CreateProductSchema = exports.UpdateBankAccountSchema = exports.CreateVendorViolationSchema = exports.AdminCampaignStatusSchema = exports.SellerCampaignSchema = exports.AdminNeighborhoodDeliverySettingSchema = exports.RequestDeliveryCoverageChangeSchema = exports.UpdateVendorDeliverySettingsSchema = exports.UpdateVendorProfileSchema = exports.ListSellerRatingsQuerySchema = exports.GetOrderSellerRatingQuerySchema = exports.UpdateSellerRatingSchema = exports.CreateSellerRatingSchema = exports.CreateProductReviewSchema = exports.CreateOrderSchema = exports.UpdateCartItemSchema = exports.AddToCartSchema = exports.AddressSchema = exports.UpdateProfileSchema = exports.ResetPasswordSchema = exports.VerifyOtpSchema = exports.ForgotPasswordSchema = exports.VerifyLoginOtpSchema = exports.RequestLoginOtpSchema = exports.LoginSchema = exports.RegisterSchema = void 0;
 const zod_1 = require("zod");
+const barcode_1 = require("./barcode");
 // Auth Schemas
 exports.RegisterSchema = zod_1.z.object({
     name: zod_1.z.string().min(2, 'Name must be at least 2 characters'),
@@ -291,6 +292,14 @@ const CreateProductImageJobSchema = zod_1.z
         }
     }
 });
+const OptionalBarcodeSchema = zod_1.z.preprocess((value) => {
+    const normalized = (0, barcode_1.normalizeBarcodeInput)(value);
+    return normalized ? normalized : undefined;
+}, zod_1.z
+    .string()
+    .refine((value) => (0, barcode_1.validateBarcode)(value).isValid, barcode_1.BARCODE_INVALID_MESSAGE)
+    .optional());
+const RequiredBarcodeSchema = zod_1.z.preprocess((value) => (0, barcode_1.normalizeBarcodeInput)(value), zod_1.z.string().refine((value) => (0, barcode_1.validateBarcode)(value).isValid, barcode_1.BARCODE_INVALID_MESSAGE));
 exports.CreateProductSchema = zod_1.z.object({
     categoryId: zod_1.z.string().min(1).optional(),
     categoryName: zod_1.z.string().min(2).optional(),
@@ -302,11 +311,7 @@ exports.CreateProductSchema = zod_1.z.object({
     price: zod_1.z.number().positive('Price must be positive'),
     stock: zod_1.z.number().int().nonnegative('Stock cannot be negative'),
     unit: zod_1.z.string().min(1, 'Unit is required'),
-    barcode: zod_1.z
-        .string()
-        .trim()
-        .regex(/^\d{8,14}$/, 'Barkod 8 ile 14 hane arasinda numerik olmalidir')
-        .optional(),
+    barcode: OptionalBarcodeSchema,
     imageUrl: zod_1.z.string().url().optional(),
     images: zod_1.z.array(zod_1.z.string().min(1)).optional(),
     imageJobs: zod_1.z.array(CreateProductImageJobSchema).optional(),
@@ -324,21 +329,14 @@ exports.UpdateProductSchema = zod_1.z.object({
     price: zod_1.z.number().positive().optional(),
     stock: zod_1.z.number().int().nonnegative().optional(),
     unit: zod_1.z.string().min(1).optional(),
-    barcode: zod_1.z
-        .string()
-        .trim()
-        .regex(/^\d{8,14}$/, 'Barkod 8 ile 14 hane arasinda numerik olmalidir')
-        .optional(),
+    barcode: OptionalBarcodeSchema,
     imageUrl: zod_1.z.string().url().optional(),
     images: zod_1.z.array(zod_1.z.string().min(1)).optional(),
     status: zod_1.z.enum(['active', 'inactive']).optional(),
     submissionSource: zod_1.z.enum(['STANDARD', 'ADVANCED']).optional(),
 });
 exports.LookupBarcodeSchema = zod_1.z.object({
-    barcode: zod_1.z
-        .string()
-        .trim()
-        .regex(/^\d{8,14}$/, 'Barkod 8 ile 14 hane arasinda numerik olmalidir'),
+    barcode: RequiredBarcodeSchema,
 });
 exports.CreateVendorCategorySchema = zod_1.z.object({
     name: zod_1.z.string().min(2, 'Category name is required'),

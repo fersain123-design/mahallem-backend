@@ -20,6 +20,7 @@ import {
   RequestDeliveryCoverageChangeSchema,
   UpdateVendorDeliverySettingsSchema,
 } from '../utils/validationSchemas';
+import { logger } from '../utils/logger';
 
 const IMAGE_CLEANER_URL = process.env.IMAGE_CLEANER_URL?.trim() || '';
 const IMAGE_CLEANER_TIMEOUT_MS = Number(process.env.IMAGE_CLEANER_TIMEOUT_MS || 120000);
@@ -1398,8 +1399,18 @@ export const lookupProductByBarcode = async (
       return;
     }
 
+    const scannedBarcode = String((req.body as any)?.barcode || '');
+    logger.debug('[BARCODE] scanned barcode', { barcode: scannedBarcode });
+
     const payload = LookupBarcodeSchema.parse(req.body);
-    console.log('BARCODE_REQUEST', {
+    logger.debug('[BARCODE] normalized barcode', { barcode: String(payload.barcode || '').trim() });
+    logger.debug('[BARCODE] validation result', {
+      barcode: String(payload.barcode || '').trim(),
+      isValid: true,
+      reason: 'schema_valid',
+    });
+
+    logger.debug('[BARCODE] local DB lookup', {
       vendorUserId: req.user.userId,
       barcode: String(payload.barcode || '').trim(),
     });
@@ -1407,19 +1418,49 @@ export const lookupProductByBarcode = async (
     const result = await vendorService.lookupProductByBarcode(req.user.userId, payload.barcode);
 
     if (result.found) {
-      console.log('BARCODE_RESULT', {
+      logger.info('[BARCODE] product found', {
         barcode: String(payload.barcode || '').trim(),
         source: result.source,
         name: String(result.product?.name || ''),
       });
     } else {
-      console.log('BARCODE_NOT_FOUND', {
+      logger.info('[BARCODE] product not found', {
         barcode: String(payload.barcode || '').trim(),
+        found: false,
         source: result.source,
+        errorCode: result.errorCode,
       });
     }
 
     res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getCategorySmartSuggestions = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Unauthorized' });
+      return;
+    }
+
+    const categoryId = String(req.query.categoryId || '').trim();
+    const subCategoryId = String(req.query.subCategoryId || '').trim();
+    const limit = Math.min(12, Math.max(1, Number(req.query.limit || 6)));
+
+    const suggestions = await vendorService.getCategorySmartSuggestions(
+      req.user.userId,
+      categoryId,
+      subCategoryId || undefined,
+      limit
+    );
+
+    res.status(200).json({ success: true, data: suggestions });
   } catch (error) {
     next(error);
   }
