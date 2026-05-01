@@ -2447,6 +2447,7 @@ export const getVendorOrders = async (
 
   const vendor = await prisma.vendorProfile.findUnique({
     where: { userId: normalizedUserId },
+    select: { id: true },
   });
 
   if (!vendor) {
@@ -2568,6 +2569,7 @@ export const getVendorOrderById = async (
 ) => {
   const vendor = await prisma.vendorProfile.findUnique({
     where: { userId },
+    select: { id: true },
   });
 
   if (!vendor) {
@@ -2626,6 +2628,7 @@ export const updateVendorOrderStatus = async (
 ) => {
   const vendor = await prisma.vendorProfile.findUnique({
     where: { userId },
+    select: { id: true },
   });
 
   if (!vendor) {
@@ -2780,8 +2783,10 @@ export const getVendorDashboard = async (userId: string) => {
 
   const vendor = await prisma.vendorProfile.findUnique({
     where: { userId: normalizedUserId },
-    include: {
-      user: true,
+    select: {
+      id: true,
+      shopName: true,
+      status: true,
     },
   });
 
