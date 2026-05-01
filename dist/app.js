@@ -100,6 +100,9 @@ app.use('/uploads', express_1.default.static(path_1.default.join(process.cwd(), 
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok' });
 });
+app.get('/', (req, res) => {
+    res.send('Backend çalışıyor 🚀');
+});
 // API Routes
 app.use('/api/auth', authRateLimit);
 app.use('/api/auth', authRoutes_1.default);
