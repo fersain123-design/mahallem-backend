@@ -114,6 +114,22 @@ const SETTLED_ORDER_FILTER = {
 
 const VENDOR_VISIBLE_PAYMENT_STATUSES = ['PAID', 'REFUNDED'] as const;
 
+const isPrismaSchemaDriftError = (error: unknown): boolean => {
+  const code = String((error as any)?.code || '').toUpperCase();
+  if (code === 'P2021' || code === 'P2022') {
+    return true;
+  }
+
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return (
+    message.includes('does not exist') ||
+    message.includes('unknown column') ||
+    message.includes('no such table') ||
+    message.includes('no such column') ||
+    message.includes('invalid `prisma.')
+  );
+};
+
 const summarizeFinancialOrderItems = (items: any[], fallbackCommissionRate: number) => {
   return items.reduce(
     (acc, item) => {
@@ -812,8 +828,16 @@ export const getPayouts = async (
   page: number = 1,
   limit: number = 20
 ) => {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    throw new AppError(400, 'sellerId is required');
+  }
+
+  const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+  const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
+
   const vendor = await prisma.vendorProfile.findUnique({
-    where: { userId },
+    where: { userId: normalizedUserId },
     select: { id: true },
   });
 
@@ -821,63 +845,84 @@ export const getPayouts = async (
     throw new AppError(404, 'Vendor profile not found');
   }
 
-  const skip = (page - 1) * limit;
+  const skip = (safePage - 1) * safeLimit;
   const where: any = { vendorProfileId: vendor.id };
   if (status) where.status = status;
 
   const commissionRate = clampCommissionRate((await settingsService.getSettings())?.commissionRate);
 
-  const [payouts, total, availableOrderItems, settledOrderItems] = await Promise.all([
-    prisma.payout.findMany({
-      where,
-      include: {
-        items: {
-          include: {
-            orderItem: {
-              select: {
-                id: true,
-                subtotal: true,
-                commissionRateSnapshot: true,
-                commissionAmount: true,
-                vendorNetAmount: true,
+  let payouts: any[] = [];
+  let total = 0;
+  let availableOrderItems: any[] = [];
+  let settledOrderItems: any[] = [];
+
+  try {
+    const result = await Promise.all([
+      prisma.payout.findMany({
+        where,
+        include: {
+          items: {
+            include: {
+              orderItem: {
+                select: {
+                  id: true,
+                  subtotal: true,
+                  commissionRateSnapshot: true,
+                  commissionAmount: true,
+                  vendorNetAmount: true,
+                },
               },
             },
           },
         },
-      },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: Math.min(Math.max(limit, 1), 100),
-    }),
-    prisma.payout.count({ where }),
-    prisma.orderItem.findMany({
-      where: {
-        vendorId: vendor.id,
-        order: SETTLED_ORDER_FILTER,
-        payoutItems: { none: {} },
-      },
-      select: {
-        id: true,
-        subtotal: true,
-        commissionRateSnapshot: true,
-        commissionAmount: true,
-        vendorNetAmount: true,
-      },
-    }),
-    prisma.orderItem.findMany({
-      where: {
-        vendorId: vendor.id,
-        order: SETTLED_ORDER_FILTER,
-      },
-      select: {
-        id: true,
-        subtotal: true,
-        commissionRateSnapshot: true,
-        commissionAmount: true,
-        vendorNetAmount: true,
-      },
-    }),
-  ]);
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: safeLimit,
+      }),
+      prisma.payout.count({ where }),
+      prisma.orderItem.findMany({
+        where: {
+          vendorId: vendor.id,
+          order: SETTLED_ORDER_FILTER,
+          payoutItems: { none: {} },
+        },
+        select: {
+          id: true,
+          subtotal: true,
+          commissionRateSnapshot: true,
+          commissionAmount: true,
+          vendorNetAmount: true,
+        },
+      }),
+      prisma.orderItem.findMany({
+        where: {
+          vendorId: vendor.id,
+          order: SETTLED_ORDER_FILTER,
+        },
+        select: {
+          id: true,
+          subtotal: true,
+          commissionRateSnapshot: true,
+          commissionAmount: true,
+          vendorNetAmount: true,
+        },
+      }),
+    ]);
+
+    payouts = result[0] as any[];
+    total = Number(result[1] || 0);
+    availableOrderItems = result[2] as any[];
+    settledOrderItems = result[3] as any[];
+  } catch (error) {
+    if (!isPrismaSchemaDriftError(error)) {
+      throw error;
+    }
+
+    logger.error('[vendorService.getPayouts] schema drift fallback applied', {
+      vendorId: vendor.id,
+      error: String((error as any)?.message || error),
+    });
+  }
 
   const mappedPayouts = payouts.map((payout) => mapPayoutWithFinancials(payout, commissionRate));
   const availableSummary = summarizeFinancialOrderItems(availableOrderItems, commissionRate);
@@ -902,9 +947,9 @@ export const getPayouts = async (
     },
     pagination: {
       total,
-      page,
-      limit,
-      pages: Math.ceil(total / limit),
+      page: safePage,
+      limit: safeLimit,
+      pages: Math.ceil(total / safeLimit),
     },
   };
 };
@@ -2392,15 +2437,23 @@ export const getVendorOrders = async (
   page: number = 1,
   limit: number = 20
 ) => {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    throw new AppError(400, 'sellerId is required');
+  }
+
+  const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+  const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
+
   const vendor = await prisma.vendorProfile.findUnique({
-    where: { userId },
+    where: { userId: normalizedUserId },
   });
 
   if (!vendor) {
     throw new AppError(404, 'Vendor profile not found');
   }
 
-  const skip = (page - 1) * limit;
+  const skip = (safePage - 1) * safeLimit;
 
   const where: any = {
     items: {
@@ -2415,43 +2468,86 @@ export const getVendorOrders = async (
     where.status = status;
   }
 
-  const [orders, total] = await Promise.all([
-    prisma.order.findMany({
-      where,
-      include: {
-        customer: {
-          select: { id: true, name: true, email: true, phone: true },
-        },
-        items: {
-          where: { vendorId: vendor.id },
-          include: {
-            product: { select: { id: true, name: true, unit: true, description: true } },
+  let orders: any[] = [];
+  let total = 0;
+
+  try {
+    const result = await Promise.all([
+      prisma.order.findMany({
+        where,
+        include: {
+          customer: {
+            select: { id: true, name: true, email: true, phone: true },
+          },
+          items: {
+            where: { vendorId: vendor.id },
+            include: {
+              product: { select: { id: true, name: true, unit: true, description: true } },
+            },
+          },
+          shippingAddress: true,
+          actionHistory: {
+            where: {
+              actorRole: 'CUSTOMER',
+              actionType: 'MESSAGE_SENT',
+              note: { not: null },
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { note: true },
           },
         },
-        shippingAddress: true,
-        actionHistory: {
-          where: {
-            actorRole: 'CUSTOMER',
-            actionType: 'MESSAGE_SENT',
-            note: { not: null },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: safeLimit,
+      }),
+      prisma.order.count({ where }),
+    ]);
+
+    orders = result[0] as any[];
+    total = Number(result[1] || 0);
+  } catch (error) {
+    if (!isPrismaSchemaDriftError(error)) {
+      throw error;
+    }
+
+    logger.error('[vendorService.getVendorOrders] schema drift fallback applied', {
+      vendorId: vendor.id,
+      error: String((error as any)?.message || error),
+    });
+
+    const result = await Promise.all([
+      prisma.order.findMany({
+        where,
+        include: {
+          customer: {
+            select: { id: true, name: true, email: true, phone: true },
           },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-          select: { note: true },
+          items: {
+            where: { vendorId: vendor.id },
+            include: {
+              product: { select: { id: true, name: true, unit: true, description: true } },
+            },
+          },
+          shippingAddress: true,
         },
-      },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-    }),
-    prisma.order.count({ where }),
-  ]);
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: safeLimit,
+      }),
+      prisma.order.count({ where }),
+    ]);
+
+    orders = (result[0] as any[]).map((order: any) => ({ ...order, notes: null }));
+    total = Number(result[1] || 0);
+  }
 
   const normalizedOrders = orders.map((order: any) => {
     const latestNote = String(order?.actionHistory?.[0]?.note || '').trim();
+    const hasNotes = latestNote.length > 0;
     return {
       ...order,
-      notes: latestNote.length > 0 ? latestNote : null,
+      notes: hasNotes ? latestNote : (order?.notes ?? null),
     };
   });
 
@@ -2459,9 +2555,9 @@ export const getVendorOrders = async (
     orders: attachOrderCodeList(normalizedOrders as any[]),
     pagination: {
       total,
-      page,
-      limit,
-      pages: Math.ceil(total / limit),
+      page: safePage,
+      limit: safeLimit,
+      pages: Math.ceil(total / safeLimit),
     },
   };
 };
@@ -2677,8 +2773,13 @@ export const updateVendorOrderStatus = async (
 };
 
 export const getVendorDashboard = async (userId: string) => {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    throw new AppError(400, 'sellerId is required');
+  }
+
   const vendor = await prisma.vendorProfile.findUnique({
-    where: { userId },
+    where: { userId: normalizedUserId },
     include: {
       user: true,
     },
@@ -2690,78 +2791,125 @@ export const getVendorDashboard = async (userId: string) => {
 
   const commissionRate = clampCommissionRate((await settingsService.getSettings())?.commissionRate);
 
-  const [settledOrderItems, orders, products, recentOrders, availableOrderItems, payouts] = await Promise.all([
-    prisma.orderItem.findMany({
-      where: {
-        vendorId: vendor.id,
-        order: SETTLED_ORDER_FILTER,
-      },
-      select: {
-        id: true,
-        productId: true,
-        quantity: true,
-        subtotal: true,
-        commissionRateSnapshot: true,
-        commissionAmount: true,
-        vendorNetAmount: true,
-        order: { select: { createdAt: true } },
-      },
-    }),
-    prisma.order.findMany({
-      where: {
-        items: { some: { vendorId: vendor.id } },
-        paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES as any },
-      },
-      select: {
-        id: true,
-        status: true,
-        createdAt: true,
-        totalPrice: true,
-      },
-    }),
-    prisma.product.findMany({
-      where: { vendorId: vendor.id },
-      select: { id: true, isActive: true, stock: true },
-    }),
-    prisma.order.findMany({
-      where: {
-        items: { some: { vendorId: vendor.id } },
-        paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES as any },
-      },
-      include: {
-        customer: {
-          select: { id: true, name: true, email: true, phone: true },
+  let settledOrderItems: any[] = [];
+  let orders: any[] = [];
+  let products: any[] = [];
+  let recentOrders: any[] = [];
+  let availableOrderItems: any[] = [];
+  let payouts: any[] = [];
+
+  try {
+    const result = await Promise.all([
+      prisma.orderItem.findMany({
+        where: {
+          vendorId: vendor.id,
+          order: SETTLED_ORDER_FILTER,
         },
-        items: {
-          where: { vendorId: vendor.id },
-          include: {
-            product: { select: { id: true, name: true, unit: true } },
+        select: {
+          id: true,
+          productId: true,
+          quantity: true,
+          subtotal: true,
+          commissionRateSnapshot: true,
+          commissionAmount: true,
+          vendorNetAmount: true,
+          order: { select: { createdAt: true } },
+        },
+      }),
+      prisma.order.findMany({
+        where: {
+          items: { some: { vendorId: vendor.id } },
+          paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES as any },
+        },
+        select: {
+          id: true,
+          status: true,
+          createdAt: true,
+          totalPrice: true,
+        },
+      }),
+      prisma.product.findMany({
+        where: { vendorId: vendor.id },
+        select: { id: true, isActive: true, stock: true },
+      }),
+      prisma.order.findMany({
+        where: {
+          items: { some: { vendorId: vendor.id } },
+          paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES as any },
+        },
+        include: {
+          customer: {
+            select: { id: true, name: true, email: true, phone: true },
           },
+          items: {
+            where: { vendorId: vendor.id },
+            include: {
+              product: { select: { id: true, name: true, unit: true } },
+            },
+          },
+          shippingAddress: true,
         },
-        shippingAddress: true,
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-    }),
-    prisma.orderItem.findMany({
-      where: {
-        vendorId: vendor.id,
-        order: SETTLED_ORDER_FILTER,
-        payoutItems: { none: {} },
-      },
-      select: {
-        id: true,
-        subtotal: true,
-        commissionRateSnapshot: true,
-        commissionAmount: true,
-        vendorNetAmount: true,
-      },
-    }),
-    prisma.payout.findMany({
-      where: { vendorProfileId: vendor.id },
-      select: { amount: true, status: true },
-    }),
-  ]);
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      }),
+      prisma.orderItem.findMany({
+        where: {
+          vendorId: vendor.id,
+          order: SETTLED_ORDER_FILTER,
+          payoutItems: { none: {} },
+        },
+        select: {
+          id: true,
+          subtotal: true,
+          commissionRateSnapshot: true,
+          commissionAmount: true,
+          vendorNetAmount: true,
+        },
+      }),
+      prisma.payout.findMany({
+        where: { vendorProfileId: vendor.id },
+        select: { amount: true, status: true },
+      }),
+    ]);
+
+    settledOrderItems = result[0] as any[];
+    orders = result[1] as any[];
+    products = result[2] as any[];
+    recentOrders = result[3] as any[];
+    availableOrderItems = result[4] as any[];
+    payouts = result[5] as any[];
+  } catch (error) {
+    if (!isPrismaSchemaDriftError(error)) {
+      throw error;
+    }
+
+    logger.error('[vendorService.getVendorDashboard] schema drift fallback applied', {
+      vendorId: vendor.id,
+      error: String((error as any)?.message || error),
+    });
+
+    const fallback = await Promise.all([
+      prisma.order.findMany({
+        where: {
+          items: { some: { vendorId: vendor.id } },
+          paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES as any },
+        },
+        select: {
+          id: true,
+          status: true,
+          createdAt: true,
+          totalPrice: true,
+        },
+      }),
+      prisma.product.findMany({
+        where: { vendorId: vendor.id },
+        select: { id: true, isActive: true, stock: true },
+      }),
+    ]);
+
+    orders = fallback[0] as any[];
+    products = fallback[1] as any[];
+  }
 
   const settledSummary = summarizeFinancialOrderItems(settledOrderItems, commissionRate);
   const availableSummary = summarizeFinancialOrderItems(availableOrderItems, commissionRate);
@@ -2776,13 +2924,17 @@ export const getVendorDashboard = async (userId: string) => {
   }, {} as Record<string, number>);
 
   // Top selling products
-  const topProducts = Array.from(
-    settledOrderItems.reduce((acc, item) => {
-      const key = String(item.productId);
-      acc.set(key, (acc.get(key) || 0) + Number(item.quantity || 0));
-      return acc;
-    }, new Map<string, number>())
-  )
+  const topProductPairs: Array<[string, number]> = Array.from(
+    settledOrderItems
+      .reduce((acc: Map<string, number>, item: any) => {
+        const key = String(item.productId);
+        acc.set(key, (acc.get(key) || 0) + Number(item.quantity || 0));
+        return acc;
+      }, new Map<string, number>())
+      .entries()
+  );
+
+  const topProducts = topProductPairs
     .sort((left, right) => right[1] - left[1])
     .slice(0, 5)
     .map(([productId, quantity]) => ({ productId, quantity }));
