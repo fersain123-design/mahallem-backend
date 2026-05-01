@@ -18,20 +18,11 @@ import { resolveLocation, getLocationStats } from './controllers/locationControl
 import { authMiddleware } from './middleware/authMiddleware';
 import { requireRole } from './middleware/requireRole';
 
-type CorsOriginCallback = (error: Error | null, allow?: boolean) => void;
-
 const app: Application = express();
-const isProduction = process.env.NODE_ENV === 'production';
-const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '');
-const corsOrigins = String(process.env.CORS_ORIGINS || '')
+const allowedOrigins = String(process.env.CORS_ORIGINS || '')
   .split(',')
-  .map((origin) => normalizeOrigin(origin))
+  .map((origin) => origin.trim())
   .filter(Boolean);
-const allowAnyOrigin = corsOrigins.includes('*') || (!isProduction && corsOrigins.length === 0);
-
-if (isProduction && corsOrigins.length === 0) {
-  console.warn('CORS_ORIGINS is empty in production; only same-origin requests without Origin header will be allowed.');
-}
 
 const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -47,18 +38,16 @@ const authRateLimit = rateLimit({
 // Middleware
 app.use(
   cors({
-    credentials: true,
-    origin: (origin: string | undefined, callback: CorsOriginCallback) => {
-      if (!origin) {
-        callback(null, true);
-        return;
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
       }
-      if (allowAnyOrigin || corsOrigins.includes(normalizeOrigin(origin))) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error('Not allowed by CORS'));
+
+      return callback(new Error(`CORS ENGELLEDI: ${origin}`));
     },
+    credentials: true,
   })
 );
 // Increase body size limit for base64 document uploads (default is 100KB, documents can be 500KB+)
@@ -71,6 +60,10 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 // Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
+});
+
+app.get('/', (req, res) => {
+  res.send('Backend çalışıyor 🚀');
 });
 
 // API Routes

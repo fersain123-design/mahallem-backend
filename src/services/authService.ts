@@ -42,17 +42,47 @@ const supabaseApiKey = String(
     ''
 ).trim();
 
+const isSqliteDatabase = () => {
+  const raw = String(process.env.DATABASE_URL || '').trim().toLowerCase();
+  return raw.startsWith('file:') || raw.startsWith('sqlite:');
+};
+
+const getVendorProfileCompat = async (userId: string) => {
+  if (isSqliteDatabase()) {
+    const rows = (await prisma.$queryRawUnsafe(
+      `SELECT
+        id, userId, shopName, iban, bankName, status, businessType,
+        address, country, city, district, neighborhood, addressLine,
+        deliveryCoverage, deliveryMode, isActive, categoryId,
+        storeAbout, openingTime, closingTime, storeCoverImageUrl, storeLogoImageUrl,
+        deliveryMinutes, minimumOrderAmount, flatDeliveryFee, freeOverAmount,
+        storeOpenOverride, preparationMinutes
+      FROM VendorProfile
+      WHERE userId = ?
+      LIMIT 1`,
+      userId
+    )) as any[];
+
+    return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  }
+
+  return prisma.vendorProfile.findUnique({
+    where: { userId },
+  });
+};
+
 const buildLoginResponse = async (userId: string) => {
   const currentUser = await prisma.user.findUnique({
     where: { id: userId },
-    include: { vendorProfile: true },
   });
 
   if (!currentUser) {
     throw new AppError(404, 'User not found');
   }
 
-  if (currentUser?.role === 'VENDOR' && !currentUser?.vendorProfile) {
+  const currentVendorProfile = await getVendorProfileCompat(userId);
+
+  if (currentUser?.role === 'VENDOR' && !currentVendorProfile) {
     const categoryId = await resolveCategoryIdForBusinessType('diger');
     await (prisma as any).vendorProfile.create({
       data: {
@@ -94,12 +124,13 @@ const buildLoginResponse = async (userId: string) => {
 
   const userWithProfile = await prisma.user.findUnique({
     where: { id: userId },
-    include: { vendorProfile: true },
   });
 
   if (!userWithProfile) {
     throw new AppError(404, 'User not found');
   }
+
+  const vendorProfile = await getVendorProfileCompat(userId);
 
   const token = generateToken({
     userId,
@@ -114,7 +145,7 @@ const buildLoginResponse = async (userId: string) => {
       email: userWithProfile.email,
       phone: userWithProfile.phone,
       role: userWithProfile.role,
-      vendorProfile: userWithProfile.vendorProfile,
+      vendorProfile,
     },
   };
 };
@@ -603,14 +634,13 @@ export const verifyLoginOtp = async (data: VerifyLoginOtpInput) => {
 export const getCurrentUser = async (userId: string) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: {
-      vendorProfile: true,
-    },
   });
 
   if (!user) {
     throw new AppError(404, 'User not found');
   }
+
+  const vendorProfile = await getVendorProfileCompat(userId);
 
   const defaultAddress =
     user.role === 'CUSTOMER'
@@ -625,7 +655,7 @@ export const getCurrentUser = async (userId: string) => {
     email: user.email,
     phone: user.phone,
     role: user.role,
-    vendorProfile: user.vendorProfile,
+    vendorProfile,
     defaultAddress,
   };
 };

@@ -30,15 +30,37 @@ const supabaseApiKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SUPABASE_ANON_KEY ||
     process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
     '').trim();
+const isSqliteDatabase = () => {
+    const raw = String(process.env.DATABASE_URL || '').trim().toLowerCase();
+    return raw.startsWith('file:') || raw.startsWith('sqlite:');
+};
+const getVendorProfileCompat = async (userId) => {
+    if (isSqliteDatabase()) {
+        const rows = (await db_1.default.$queryRawUnsafe(`SELECT
+        id, userId, shopName, iban, bankName, status, businessType,
+        address, country, city, district, neighborhood, addressLine,
+        deliveryCoverage, deliveryMode, isActive, categoryId,
+        storeAbout, openingTime, closingTime, storeCoverImageUrl, storeLogoImageUrl,
+        deliveryMinutes, minimumOrderAmount, flatDeliveryFee, freeOverAmount,
+        storeOpenOverride, preparationMinutes
+      FROM VendorProfile
+      WHERE userId = ?
+      LIMIT 1`, userId));
+        return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+    }
+    return db_1.default.vendorProfile.findUnique({
+        where: { userId },
+    });
+};
 const buildLoginResponse = async (userId) => {
     const currentUser = await db_1.default.user.findUnique({
         where: { id: userId },
-        include: { vendorProfile: true },
     });
     if (!currentUser) {
         throw new errorHandler_1.AppError(404, 'User not found');
     }
-    if (currentUser?.role === 'VENDOR' && !currentUser?.vendorProfile) {
+    const currentVendorProfile = await getVendorProfileCompat(userId);
+    if (currentUser?.role === 'VENDOR' && !currentVendorProfile) {
         const categoryId = await (0, subcategoryService_1.resolveCategoryIdForBusinessType)('diger');
         await db_1.default.vendorProfile.create({
             data: {
@@ -77,11 +99,11 @@ const buildLoginResponse = async (userId) => {
     }
     const userWithProfile = await db_1.default.user.findUnique({
         where: { id: userId },
-        include: { vendorProfile: true },
     });
     if (!userWithProfile) {
         throw new errorHandler_1.AppError(404, 'User not found');
     }
+    const vendorProfile = await getVendorProfileCompat(userId);
     const token = (0, jwtUtils_1.generateToken)({
         userId,
         role: userWithProfile.role,
@@ -94,7 +116,7 @@ const buildLoginResponse = async (userId) => {
             email: userWithProfile.email,
             phone: userWithProfile.phone,
             role: userWithProfile.role,
-            vendorProfile: userWithProfile.vendorProfile,
+            vendorProfile,
         },
     };
 };
@@ -499,13 +521,11 @@ exports.verifyLoginOtp = verifyLoginOtp;
 const getCurrentUser = async (userId) => {
     const user = await db_1.default.user.findUnique({
         where: { id: userId },
-        include: {
-            vendorProfile: true,
-        },
     });
     if (!user) {
         throw new errorHandler_1.AppError(404, 'User not found');
     }
+    const vendorProfile = await getVendorProfileCompat(userId);
     const defaultAddress = user.role === 'CUSTOMER'
         ? await db_1.default.customerAddress.findFirst({
             where: { userId, isDefault: true },
@@ -517,7 +537,7 @@ const getCurrentUser = async (userId) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
-        vendorProfile: user.vendorProfile,
+        vendorProfile,
         defaultAddress,
     };
 };

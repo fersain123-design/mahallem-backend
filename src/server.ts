@@ -1,7 +1,7 @@
 import './config/env';
 import './types/express';
 import app from './app';
-import prisma from './config/db';
+import prisma, { ensureSqliteCompatibility } from './config/db';
 import { spatialService } from './services/spatialService';
 import { startProductProcessingWorker } from './services/productProcessingQueue';
 import fs from 'fs';
@@ -139,6 +139,7 @@ const startServer = async () => {
   try {
     // Test database connection
     await withTimeout(prisma.$connect(), 30000, 'Database connection timed out (30s).');
+    await ensureSqliteCompatibility();
     console.log('✓ Database connected successfully');
 
     await startProductProcessingWorker();
