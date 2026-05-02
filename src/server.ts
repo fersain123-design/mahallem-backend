@@ -136,6 +136,35 @@ const kickoffImageCleanerBoot = (): void => {
 };
 
 const startServer = async () => {
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`
+╔════════════════════════════════════════════╗
+    ║      Mahallem Backend Server Started       ║
+║         http://${HOST}:${PORT}                 ║
+╚════════════════════════════════════════════╝
+      `);
+
+    kickoffImageCleanerBoot();
+
+    // Server başlar başlamaz GeoJSON'u R-Tree'ye yükle
+    try {
+      spatialService.loadGeoJSON('neighborhoods.geojson');
+    } catch (err) {
+      console.error('GeoJSON yüklenemedi, spatial index devre dışı:', err);
+    }
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`✗ Port ${PORT} is already in use.`);
+      console.error(`✱ Stop the running backend process on port ${PORT}, or start with another port.`);
+      console.error('✱ Example (PowerShell): $env:PORT="4001"; npm run dev');
+    } else {
+      console.error('✗ Failed to bind HTTP server:', err);
+    }
+    process.exit(1);
+  });
+
   try {
     // Test database connection
     await withTimeout(prisma.$connect(), 30000, 'Database connection timed out (30s).');
@@ -143,41 +172,14 @@ const startServer = async () => {
     console.log('✓ Database connected successfully');
 
     await startProductProcessingWorker();
-
-    const server = app.listen(PORT, HOST, () => {
-      console.log(`
-╔════════════════════════════════════════════╗
-    ║      Mahallem Backend Server Started       ║
-║         http://${HOST}:${PORT}                 ║
-╚════════════════════════════════════════════╝
-      `);
-
-      kickoffImageCleanerBoot();
-      
-      // Server başlar başlamaz GeoJSON'u R-Tree'ye yükle
-      try {
-        spatialService.loadGeoJSON('neighborhoods.geojson');
-      } catch (err) {
-        console.error('GeoJSON yüklenemedi, spatial index devre dışı:', err);
-      }
-    });
-
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        console.error(`✗ Port ${PORT} is already in use.`);
-        console.error(`✱ Stop the running backend process on port ${PORT}, or start with another port.`);
-        console.error('✱ Example (PowerShell): $env:PORT="4001"; npm run dev');
-      } else {
-        console.error('✗ Failed to bind HTTP server:', err);
-      }
-      process.exit(1);
-    });
   } catch (error) {
     console.error('✗ Failed to start server:', error);
     if (!process.env.DATABASE_URL) {
       console.error('✱ Missing DATABASE_URL. Set it in .env or .env.development');
     }
-    process.exit(1);
+
+    // If critical bootstrap fails after the port is open, close gracefully and exit.
+    server.close(() => process.exit(1));
   }
 };
 
