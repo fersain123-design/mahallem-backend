@@ -56,16 +56,10 @@ const locationController_1 = require("./controllers/locationController");
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const requireRole_1 = require("./middleware/requireRole");
 const app = (0, express_1.default)();
-const isProduction = process.env.NODE_ENV === 'production';
-const normalizeOrigin = (origin) => origin.trim().replace(/\/+$/, '');
-const corsOrigins = String(process.env.CORS_ORIGINS || '')
+const allowedOrigins = String(process.env.CORS_ORIGINS || '')
     .split(',')
-    .map((origin) => normalizeOrigin(origin))
+    .map((origin) => origin.trim())
     .filter(Boolean);
-const allowAnyOrigin = corsOrigins.includes('*') || (!isProduction && corsOrigins.length === 0);
-if (isProduction && corsOrigins.length === 0) {
-    console.warn('CORS_ORIGINS is empty in production; only same-origin requests without Origin header will be allowed.');
-}
 const authRateLimit = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
     max: Math.max(5, Number(process.env.AUTH_RATE_LIMIT_MAX || 20)),
@@ -78,18 +72,15 @@ const authRateLimit = (0, express_rate_limit_1.default)({
 });
 // Middleware
 app.use((0, cors_1.default)({
-    credentials: true,
     origin: (origin, callback) => {
-        if (!origin) {
-            callback(null, true);
-            return;
+        if (!origin)
+            return callback(null, true);
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
         }
-        if (allowAnyOrigin || corsOrigins.includes(normalizeOrigin(origin))) {
-            callback(null, true);
-            return;
-        }
-        callback(new Error('Not allowed by CORS'));
+        return callback(new Error(`CORS ENGELLEDI: ${origin}`));
     },
+    credentials: true,
 }));
 // Increase body size limit for base64 document uploads (default is 100KB, documents can be 500KB+)
 app.use(express_1.default.json({ limit: '10mb' }));

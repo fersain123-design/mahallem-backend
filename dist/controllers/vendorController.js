@@ -45,6 +45,7 @@ const child_process_1 = require("child_process");
 const vendorService = __importStar(require("../services/vendorService"));
 const db_1 = __importDefault(require("../config/db"));
 const zod_1 = require("zod");
+const errorHandler_1 = require("../middleware/errorHandler");
 const validationSchemas_1 = require("../utils/validationSchemas");
 const logger_1 = require("../utils/logger");
 const IMAGE_CLEANER_URL = process.env.IMAGE_CLEANER_URL?.trim() || '';
@@ -1346,18 +1347,28 @@ const replyToProductReview = async (req, res, next) => {
 };
 exports.replyToProductReview = replyToProductReview;
 // Orders
-const getOrders = async (req, res, next) => {
+const getOrders = async (req, res, _next) => {
     try {
+        const sellerId = String(req.user?.userId || '').trim();
+        if (!sellerId) {
+            res.status(400).json({ success: false, message: 'sellerId is required' });
+            return;
+        }
         if (!req.user) {
             res.status(401).json({ success: false, message: 'Unauthorized' });
             return;
         }
         const { status, page, limit } = req.query;
-        const result = await vendorService.getVendorOrders(req.user.userId, status, page ? parseInt(page) : 1, limit ? parseInt(limit) : 20);
+        const result = await vendorService.getVendorOrders(sellerId, status, page ? parseInt(page) : 1, limit ? parseInt(limit) : 20);
         res.status(200).json({ success: true, data: result });
     }
     catch (error) {
-        next(error);
+        console.error('[vendorController.getOrders] Error:', error);
+        if (error instanceof errorHandler_1.AppError) {
+            res.status(error.statusCode).json({ success: false, message: error.message });
+            return;
+        }
+        res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
 exports.getOrders = getOrders;
@@ -1393,17 +1404,27 @@ const updateOrderStatus = async (req, res, next) => {
 };
 exports.updateOrderStatus = updateOrderStatus;
 // Dashboard
-const getDashboard = async (req, res, next) => {
+const getDashboard = async (req, res, _next) => {
     try {
+        const sellerId = String(req.user?.userId || '').trim();
+        if (!sellerId) {
+            res.status(400).json({ success: false, message: 'sellerId is required' });
+            return;
+        }
         if (!req.user) {
             res.status(401).json({ success: false, message: 'Unauthorized' });
             return;
         }
-        const dashboard = await vendorService.getVendorDashboard(req.user.userId);
+        const dashboard = await vendorService.getVendorDashboard(sellerId);
         res.status(200).json({ success: true, data: dashboard });
     }
     catch (error) {
-        next(error);
+        console.error('[vendorController.getDashboard] Error:', error);
+        if (error instanceof errorHandler_1.AppError) {
+            res.status(error.statusCode).json({ success: false, message: error.message });
+            return;
+        }
+        res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
 exports.getDashboard = getDashboard;

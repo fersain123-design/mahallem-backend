@@ -127,6 +127,18 @@ const SETTLED_ORDER_FILTER = {
     paymentStatus: 'PAID',
 };
 const VENDOR_VISIBLE_PAYMENT_STATUSES = ['PAID', 'REFUNDED'];
+const isPrismaSchemaDriftError = (error) => {
+    const code = String(error?.code || '').toUpperCase();
+    if (code === 'P2021' || code === 'P2022') {
+        return true;
+    }
+    const message = String(error?.message || error || '').toLowerCase();
+    return (message.includes('does not exist') ||
+        message.includes('unknown column') ||
+        message.includes('no such table') ||
+        message.includes('no such column') ||
+        message.includes('invalid `prisma.'));
+};
 const summarizeFinancialOrderItems = (items, fallbackCommissionRate) => {
     return items.reduce((acc, item) => {
         const financials = (0, commission_1.resolveOrderItemFinancials)(item, fallbackCommissionRate);
@@ -673,69 +685,94 @@ const requestIbanChange = async (userId) => {
 };
 exports.requestIbanChange = requestIbanChange;
 const getPayouts = async (userId, status, page = 1, limit = 20) => {
+    const normalizedUserId = String(userId || '').trim();
+    if (!normalizedUserId) {
+        throw new errorHandler_1.AppError(400, 'sellerId is required');
+    }
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
     const vendor = await db_1.default.vendorProfile.findUnique({
-        where: { userId },
+        where: { userId: normalizedUserId },
         select: { id: true },
     });
     if (!vendor) {
         throw new errorHandler_1.AppError(404, 'Vendor profile not found');
     }
-    const skip = (page - 1) * limit;
+    const skip = (safePage - 1) * safeLimit;
     const where = { vendorProfileId: vendor.id };
     if (status)
         where.status = status;
     const commissionRate = (0, commission_1.clampCommissionRate)((await settingsService.getSettings())?.commissionRate);
-    const [payouts, total, availableOrderItems, settledOrderItems] = await Promise.all([
-        db_1.default.payout.findMany({
-            where,
-            include: {
-                items: {
-                    include: {
-                        orderItem: {
-                            select: {
-                                id: true,
-                                subtotal: true,
-                                commissionRateSnapshot: true,
-                                commissionAmount: true,
-                                vendorNetAmount: true,
+    let payouts = [];
+    let total = 0;
+    let availableOrderItems = [];
+    let settledOrderItems = [];
+    try {
+        const result = await Promise.all([
+            db_1.default.payout.findMany({
+                where,
+                include: {
+                    items: {
+                        include: {
+                            orderItem: {
+                                select: {
+                                    id: true,
+                                    subtotal: true,
+                                    commissionRateSnapshot: true,
+                                    commissionAmount: true,
+                                    vendorNetAmount: true,
+                                },
                             },
                         },
                     },
                 },
-            },
-            orderBy: { createdAt: 'desc' },
-            skip,
-            take: Math.min(Math.max(limit, 1), 100),
-        }),
-        db_1.default.payout.count({ where }),
-        db_1.default.orderItem.findMany({
-            where: {
-                vendorId: vendor.id,
-                order: SETTLED_ORDER_FILTER,
-                payoutItems: { none: {} },
-            },
-            select: {
-                id: true,
-                subtotal: true,
-                commissionRateSnapshot: true,
-                commissionAmount: true,
-                vendorNetAmount: true,
-            },
-        }),
-        db_1.default.orderItem.findMany({
-            where: {
-                vendorId: vendor.id,
-                order: SETTLED_ORDER_FILTER,
-            },
-            select: {
-                id: true,
-                subtotal: true,
-                commissionRateSnapshot: true,
-                commissionAmount: true,
-                vendorNetAmount: true,
-            },
-        }),
-    ]);
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: safeLimit,
+            }),
+            db_1.default.payout.count({ where }),
+            db_1.default.orderItem.findMany({
+                where: {
+                    vendorId: vendor.id,
+                    order: SETTLED_ORDER_FILTER,
+                    payoutItems: { none: {} },
+                },
+                select: {
+                    id: true,
+                    subtotal: true,
+                    commissionRateSnapshot: true,
+                    commissionAmount: true,
+                    vendorNetAmount: true,
+                },
+            }),
+            db_1.default.orderItem.findMany({
+                where: {
+                    vendorId: vendor.id,
+                    order: SETTLED_ORDER_FILTER,
+                },
+                select: {
+                    id: true,
+                    subtotal: true,
+                    commissionRateSnapshot: true,
+                    commissionAmount: true,
+                    vendorNetAmount: true,
+                },
+            }),
+        ]);
+        payouts = result[0];
+        total = Number(result[1] || 0);
+        availableOrderItems = result[2];
+        settledOrderItems = result[3];
+    }
+    catch (error) {
+        if (!isPrismaSchemaDriftError(error)) {
+            throw error;
+        }
+        logger_1.logger.error('[vendorService.getPayouts] schema drift fallback applied', {
+            vendorId: vendor.id,
+            error: String(error?.message || error),
+        });
+    }
     const mappedPayouts = payouts.map((payout) => mapPayoutWithFinancials(payout, commissionRate));
     const availableSummary = summarizeFinancialOrderItems(availableOrderItems, commissionRate);
     const settledSummary = summarizeFinancialOrderItems(settledOrderItems, commissionRate);
@@ -758,9 +795,9 @@ const getPayouts = async (userId, status, page = 1, limit = 20) => {
         },
         pagination: {
             total,
-            page,
-            limit,
-            pages: Math.ceil(total / limit),
+            page: safePage,
+            limit: safeLimit,
+            pages: Math.ceil(total / safeLimit),
         },
     };
 };
@@ -2038,13 +2075,20 @@ const deleteProduct = async (productId, userId) => {
 };
 exports.deleteProduct = deleteProduct;
 const getVendorOrders = async (userId, status, page = 1, limit = 20) => {
+    const normalizedUserId = String(userId || '').trim();
+    if (!normalizedUserId) {
+        throw new errorHandler_1.AppError(400, 'sellerId is required');
+    }
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
     const vendor = await db_1.default.vendorProfile.findUnique({
-        where: { userId },
+        where: { userId: normalizedUserId },
+        select: { id: true },
     });
     if (!vendor) {
         throw new errorHandler_1.AppError(404, 'Vendor profile not found');
     }
-    const skip = (page - 1) * limit;
+    const skip = (safePage - 1) * safeLimit;
     const where = {
         items: {
             some: { vendorId: vendor.id },
@@ -2056,51 +2100,90 @@ const getVendorOrders = async (userId, status, page = 1, limit = 20) => {
     if (status) {
         where.status = status;
     }
-    const [orders, total] = await Promise.all([
-        db_1.default.order.findMany({
-            where,
-            include: {
-                customer: {
-                    select: { id: true, name: true, email: true, phone: true },
-                },
-                items: {
-                    where: { vendorId: vendor.id },
-                    include: {
-                        product: { select: { id: true, name: true, unit: true, description: true } },
+    let orders = [];
+    let total = 0;
+    try {
+        const result = await Promise.all([
+            db_1.default.order.findMany({
+                where,
+                include: {
+                    customer: {
+                        select: { id: true, name: true, email: true, phone: true },
+                    },
+                    items: {
+                        where: { vendorId: vendor.id },
+                        include: {
+                            product: { select: { id: true, name: true, unit: true, description: true } },
+                        },
+                    },
+                    shippingAddress: true,
+                    actionHistory: {
+                        where: {
+                            actorRole: 'CUSTOMER',
+                            actionType: 'MESSAGE_SENT',
+                            note: { not: null },
+                        },
+                        orderBy: { createdAt: 'desc' },
+                        take: 1,
+                        select: { note: true },
                     },
                 },
-                shippingAddress: true,
-                actionHistory: {
-                    where: {
-                        actorRole: 'CUSTOMER',
-                        actionType: 'MESSAGE_SENT',
-                        note: { not: null },
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: safeLimit,
+            }),
+            db_1.default.order.count({ where }),
+        ]);
+        orders = result[0];
+        total = Number(result[1] || 0);
+    }
+    catch (error) {
+        if (!isPrismaSchemaDriftError(error)) {
+            throw error;
+        }
+        logger_1.logger.error('[vendorService.getVendorOrders] schema drift fallback applied', {
+            vendorId: vendor.id,
+            error: String(error?.message || error),
+        });
+        const result = await Promise.all([
+            db_1.default.order.findMany({
+                where,
+                include: {
+                    customer: {
+                        select: { id: true, name: true, email: true, phone: true },
                     },
-                    orderBy: { createdAt: 'desc' },
-                    take: 1,
-                    select: { note: true },
+                    items: {
+                        where: { vendorId: vendor.id },
+                        include: {
+                            product: { select: { id: true, name: true, unit: true, description: true } },
+                        },
+                    },
+                    shippingAddress: true,
                 },
-            },
-            orderBy: { createdAt: 'desc' },
-            skip,
-            take: limit,
-        }),
-        db_1.default.order.count({ where }),
-    ]);
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: safeLimit,
+            }),
+            db_1.default.order.count({ where }),
+        ]);
+        orders = result[0].map((order) => ({ ...order, notes: null }));
+        total = Number(result[1] || 0);
+    }
     const normalizedOrders = orders.map((order) => {
         const latestNote = String(order?.actionHistory?.[0]?.note || '').trim();
+        const hasNotes = latestNote.length > 0;
         return {
             ...order,
-            notes: latestNote.length > 0 ? latestNote : null,
+            notes: hasNotes ? latestNote : (order?.notes ?? null),
         };
     });
     return {
         orders: (0, orderCode_1.attachOrderCodeList)(normalizedOrders),
         pagination: {
             total,
-            page,
-            limit,
-            pages: Math.ceil(total / limit),
+            page: safePage,
+            limit: safeLimit,
+            pages: Math.ceil(total / safeLimit),
         },
     };
 };
@@ -2108,6 +2191,7 @@ exports.getVendorOrders = getVendorOrders;
 const getVendorOrderById = async (orderId, userId) => {
     const vendor = await db_1.default.vendorProfile.findUnique({
         where: { userId },
+        select: { id: true },
     });
     if (!vendor) {
         throw new errorHandler_1.AppError(404, 'Vendor profile not found');
@@ -2153,6 +2237,7 @@ exports.getVendorOrderById = getVendorOrderById;
 const updateVendorOrderStatus = async (orderId, userId, status, note, reasonTitle) => {
     const vendor = await db_1.default.vendorProfile.findUnique({
         where: { userId },
+        select: { id: true },
     });
     if (!vendor) {
         throw new errorHandler_1.AppError(404, 'Vendor profile not found');
@@ -2284,88 +2369,137 @@ const updateVendorOrderStatus = async (orderId, userId, status, note, reasonTitl
 };
 exports.updateVendorOrderStatus = updateVendorOrderStatus;
 const getVendorDashboard = async (userId) => {
+    const normalizedUserId = String(userId || '').trim();
+    if (!normalizedUserId) {
+        throw new errorHandler_1.AppError(400, 'sellerId is required');
+    }
     const vendor = await db_1.default.vendorProfile.findUnique({
-        where: { userId },
-        include: {
-            user: true,
+        where: { userId: normalizedUserId },
+        select: {
+            id: true,
+            shopName: true,
+            status: true,
         },
     });
     if (!vendor) {
         throw new errorHandler_1.AppError(404, 'Vendor profile not found');
     }
     const commissionRate = (0, commission_1.clampCommissionRate)((await settingsService.getSettings())?.commissionRate);
-    const [settledOrderItems, orders, products, recentOrders, availableOrderItems, payouts] = await Promise.all([
-        db_1.default.orderItem.findMany({
-            where: {
-                vendorId: vendor.id,
-                order: SETTLED_ORDER_FILTER,
-            },
-            select: {
-                id: true,
-                productId: true,
-                quantity: true,
-                subtotal: true,
-                commissionRateSnapshot: true,
-                commissionAmount: true,
-                vendorNetAmount: true,
-                order: { select: { createdAt: true } },
-            },
-        }),
-        db_1.default.order.findMany({
-            where: {
-                items: { some: { vendorId: vendor.id } },
-                paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES },
-            },
-            select: {
-                id: true,
-                status: true,
-                createdAt: true,
-                totalPrice: true,
-            },
-        }),
-        db_1.default.product.findMany({
-            where: { vendorId: vendor.id },
-            select: { id: true, isActive: true, stock: true },
-        }),
-        db_1.default.order.findMany({
-            where: {
-                items: { some: { vendorId: vendor.id } },
-                paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES },
-            },
-            include: {
-                customer: {
-                    select: { id: true, name: true, email: true, phone: true },
+    let settledOrderItems = [];
+    let orders = [];
+    let products = [];
+    let recentOrders = [];
+    let availableOrderItems = [];
+    let payouts = [];
+    try {
+        const result = await Promise.all([
+            db_1.default.orderItem.findMany({
+                where: {
+                    vendorId: vendor.id,
+                    order: SETTLED_ORDER_FILTER,
                 },
-                items: {
-                    where: { vendorId: vendor.id },
-                    include: {
-                        product: { select: { id: true, name: true, unit: true } },
+                select: {
+                    id: true,
+                    productId: true,
+                    quantity: true,
+                    subtotal: true,
+                    commissionRateSnapshot: true,
+                    commissionAmount: true,
+                    vendorNetAmount: true,
+                    order: { select: { createdAt: true } },
+                },
+            }),
+            db_1.default.order.findMany({
+                where: {
+                    items: { some: { vendorId: vendor.id } },
+                    paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES },
+                },
+                select: {
+                    id: true,
+                    status: true,
+                    createdAt: true,
+                    totalPrice: true,
+                },
+            }),
+            db_1.default.product.findMany({
+                where: { vendorId: vendor.id },
+                select: { id: true, isActive: true, stock: true },
+            }),
+            db_1.default.order.findMany({
+                where: {
+                    items: { some: { vendorId: vendor.id } },
+                    paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES },
+                },
+                include: {
+                    customer: {
+                        select: { id: true, name: true, email: true, phone: true },
                     },
+                    items: {
+                        where: { vendorId: vendor.id },
+                        include: {
+                            product: { select: { id: true, name: true, unit: true } },
+                        },
+                    },
+                    shippingAddress: true,
                 },
-                shippingAddress: true,
-            },
-            orderBy: { createdAt: 'desc' },
-            take: 5,
-        }),
-        db_1.default.orderItem.findMany({
-            where: {
-                vendorId: vendor.id,
-                order: SETTLED_ORDER_FILTER,
-                payoutItems: { none: {} },
-            },
-            select: {
-                id: true,
-                subtotal: true,
-                commissionRateSnapshot: true,
-                commissionAmount: true,
-                vendorNetAmount: true,
-            },
-        }),
-        db_1.default.payout.findMany({
-            where: { vendorProfileId: vendor.id },
-            select: { amount: true, status: true },
-        }),
-    ]);
+                orderBy: { createdAt: 'desc' },
+                take: 5,
+            }),
+            db_1.default.orderItem.findMany({
+                where: {
+                    vendorId: vendor.id,
+                    order: SETTLED_ORDER_FILTER,
+                    payoutItems: { none: {} },
+                },
+                select: {
+                    id: true,
+                    subtotal: true,
+                    commissionRateSnapshot: true,
+                    commissionAmount: true,
+                    vendorNetAmount: true,
+                },
+            }),
+            db_1.default.payout.findMany({
+                where: { vendorProfileId: vendor.id },
+                select: { amount: true, status: true },
+            }),
+        ]);
+        settledOrderItems = result[0];
+        orders = result[1];
+        products = result[2];
+        recentOrders = result[3];
+        availableOrderItems = result[4];
+        payouts = result[5];
+    }
+    catch (error) {
+        if (!isPrismaSchemaDriftError(error)) {
+            throw error;
+        }
+        logger_1.logger.error('[vendorService.getVendorDashboard] schema drift fallback applied', {
+            vendorId: vendor.id,
+            error: String(error?.message || error),
+        });
+        const fallback = await Promise.all([
+            db_1.default.order.findMany({
+                where: {
+                    items: { some: { vendorId: vendor.id } },
+                    paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES },
+                },
+                select: {
+                    id: true,
+                    status: true,
+                    createdAt: true,
+                    totalPrice: true,
+                },
+            }),
+            db_1.default.product.findMany({
+                where: { vendorId: vendor.id },
+                select: { id: true, isActive: true, stock: true },
+            }),
+        ]);
+        orders = fallback[0];
+        products = fallback[1];
+    }
     const settledSummary = summarizeFinancialOrderItems(settledOrderItems, commissionRate);
     const availableSummary = summarizeFinancialOrderItems(availableOrderItems, commissionRate);
     // Total orders
@@ -2376,11 +2510,14 @@ const getVendorDashboard = async (userId) => {
         return acc;
     }, {});
     // Top selling products
-    const topProducts = Array.from(settledOrderItems.reduce((acc, item) => {
+    const topProductPairs = Array.from(settledOrderItems
+        .reduce((acc, item) => {
         const key = String(item.productId);
         acc.set(key, (acc.get(key) || 0) + Number(item.quantity || 0));
         return acc;
-    }, new Map()))
+    }, new Map())
+        .entries());
+    const topProducts = topProductPairs
         .sort((left, right) => right[1] - left[1])
         .slice(0, 5)
         .map(([productId, quantity]) => ({ productId, quantity }));
