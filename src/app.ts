@@ -117,4 +117,15 @@ app.use((req, res) => {
   });
 });
 
+// Safety net for platforms that run `node dist/app.js` directly.
+if (require.main === module) {
+  const parsedPort = Number(process.env.PORT || 4000);
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 4000;
+  const host = '0.0.0.0';
+
+  app.listen(port, host, () => {
+    console.log(`[app-standalone] Listening on http://${host}:${port}`);
+  });
+}
+
 export default app;
