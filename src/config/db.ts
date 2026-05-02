@@ -1,5 +1,17 @@
 import { PrismaClient } from '@prisma/client';
 
+const rawPostgresDatabaseUrl = String(process.env.POSTGRES_DATABASE_URL || '').trim();
+const fallbackDatabaseUrl = String(process.env.DATABASE_URL || '').trim();
+
+if (!rawPostgresDatabaseUrl && /^postgres(ql)?:\/\//i.test(fallbackDatabaseUrl)) {
+  process.env.POSTGRES_DATABASE_URL = fallbackDatabaseUrl;
+  console.log('[db] POSTGRES_DATABASE_URL not set, falling back to DATABASE_URL.');
+}
+
+if (!process.env.POSTGRES_DIRECT_URL && process.env.POSTGRES_DATABASE_URL) {
+  process.env.POSTGRES_DIRECT_URL = process.env.POSTGRES_DATABASE_URL;
+}
+
 const rawLogLevel = String(process.env.LOG_LEVEL || '').trim().toLowerCase();
 const logLevel = rawLogLevel === 'debug' || rawLogLevel === 'error' ? rawLogLevel : 'info';
 
